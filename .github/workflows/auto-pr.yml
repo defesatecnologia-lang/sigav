@@ -68,13 +68,10 @@ jobs:
             exit 0
           fi
 
-          # Branch já mergeada: não reabrir PR duplicado.
-          MERGED=$(gh pr list --head "$BRANCH" --base "$BASE" --state merged \
-            --json number --jq '.[].number')
-          if [ -n "$MERGED" ]; then
-            echo "::notice::$BRANCH já possui PR mergeado em $BASE; PR não recriado."
-            exit 0
-          fi
+          # Não bloquear por PR mergeado anterior: branches de desenvolvimento
+          # são de longa duração (ex.: fix/dev-development) e devem continuar
+          # abrindo novos PRs. O critério é a ausência de commits além da base,
+          # verificado logo abaixo.
 
           git fetch origin "$BASE" --quiet
 
