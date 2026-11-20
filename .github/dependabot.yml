@@ -13,6 +13,13 @@ updates:
     directory: /backend
     schedule:
       interval: weekly
+    # ts-jest 29 (usado pelo Jest do backend) declara peer typescript
+    # ">=4.3 <7" e typescript-eslint 8 também não suporta TS 7: o npm ci
+    # falha com ERESOLVE se o dependabot bumpar o typescript para 7.x.
+    # Reavaliar quando ts-jest e typescript-eslint suportarem TS >= 7.
+    ignore:
+      - dependency-name: typescript
+        versions: ["7.x"]
 
   # Frontend Next.js
   - package-ecosystem: npm
@@ -32,6 +39,12 @@ updates:
     directory: /packages/shared
     schedule:
       interval: weekly
+    # Mantém o compilador do pacote alinhado a backend e frontend (TS 6).
+    # O bump para 7.x reintroduz a divergência nos lockfiles que dependem
+    # de file:../packages/shared e o bump do backend é rejeitado no CI.
+    ignore:
+      - dependency-name: typescript
+        versions: ["7.x"]
 
   # Suíte E2E (Playwright)
   - package-ecosystem: npm
