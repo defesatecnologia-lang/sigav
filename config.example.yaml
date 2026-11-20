@@ -1,0 +1,162 @@
+#This configuration is pre-filled with the default values.
+#You can remove keys you don't want to set. If a key is missing, the value set in the UI will be used; if that is also unset, the default value applies.
+
+general:
+  #Name of the application
+  appName: Guarda Municipal de Londrina
+  #On which URL Controle-share-videos-v1.0 is available
+  appUrl: http://localhost:3000
+  #Whether to set the secure flag on cookies. If enabled, the site will not function when accessed over HTTP.
+  #VULN-23: keep "true" in production (HTTPS) — required for __Host- cookies
+  #(VULN-13). Only use "false" for local development over plain HTTP.
+  secureCookies: "false"
+  #Whether to show the home page
+  showHomePage: "true"
+  #Time after which a user must log in again (default: 3 months).
+  sessionDuration: 3 months
+appearance:
+  #Mantine primary color used across the UI.
+  #Use one of the named colors: dark, gray, red, pink, grape, violet, indigo, blue, cyan, teal, green, lime, yellow, orange, victoria, custom
+  themePrimaryColor: victoria
+  #If themePrimaryColor is set to custom, this hex color will be used as override.
+  themePrimaryColorOverride: ""
+  #Mantine default border radius (xs, sm, md, lg, xl).
+  themeRadius: sm
+  #Default color scheme for the UI. Options: system, light, dark
+  themeColorScheme: system
+  #Custom CSS that will be injected globally into the frontend. Use carefully, as invalid CSS may impact the UI.
+  customCss: ""
+share:
+  #Whether registration is allowed
+  allowRegistration: "true"
+  #Maximum share expiration. Set to 0 to allow unlimited expiration.
+  maxExpiration: 0 days
+  #Default length for the generated ID of a share. A value below 8 is not considered secure.
+  shareIdLength: "8"
+  #Maximum share size
+  maxSize: "1000000000"
+  #Adjust the level to balance between file size and compression speed. Valid values range from 0 to 9, with 0 being no compression and 9 being maximum compression.
+  zipCompressionLevel: "9"
+  #Adjust the chunk size for your uploads to balance efficiency and reliability according to your internet connection. Smaller chunks can enhance success rates for unstable connections, while larger chunks make uploads faster for stable connections.
+  chunkSize: "10000000"
+  #The share creation modal automatically appears when a user selects files, eliminating the need to manually click the button.
+  autoOpenShareModal: "false"
+  #Whether admins can access all shares without tokens/passwords
+  allowAdminAccessAllShares: "false"
+  #How long files are kept after shares expire or are deleted by the uploader.
+  fileRetentionPeriod: 0 days
+cache:
+  #Normally Controle-share-videos-v1.0 caches information in memory. If you run multiple instances of Controle-share-videos-v1.0, you need to enable Redis caching to share the cache between the instances.
+  redis-enabled: "false"
+  #Url to connect to the Redis instance used for caching.
+  redis-url: redis://controle-share-videos-redis:6379
+  #Time in second to keep information inside the cache.
+  ttl: "60"
+  #Maximum number of items inside the cache.
+  maxItems: "1000"
+email:
+  #Whether to allow email sharing with recipients. Only enable this if SMTP is activated.
+  enableShareEmailRecipients: "false"
+  #Subject of the email which gets sent to the share recipients.
+  shareRecipientsSubject: Files shared with you
+  #Message which gets sent to the share recipients. Available variables:
+  # {creator} - The username of the creator of the share
+  # {creatorEmail} - The email of the creator of the share
+  # {shareUrl} - The URL of the share
+  # {desc} - The description of the share
+  # {expires} - The expiration date of the share
+  # These variables will be replaced with the actual value.
+  shareRecipientsMessage: >-
+    Hey!
+
+
+    {creator} ({creatorEmail}) shared some files with you. You can view or download the
+    files with this link: {shareUrl}
+
+
+    The share will expire {expires}.
+
+
+    Note: {desc}
+
+
+    Shared securely with Controle-share-videos-v1.0 🐧
+  #Subject of the sent email when a user requests a password reset.
+  resetPasswordSubject: Controle-share-videos-v1.0 password reset
+  #Message which gets sent when a user requests a password reset. {url} will be replaced with the reset password URL.
+  resetPasswordMessage: >-
+    Hey!
+
+
+    You requested a password reset. Click this link to reset your password:
+    {url}
+
+    The link expires in an hour.
+
+
+    Controle-share-videos-v1.0 🐧
+  #Subject of the sent email when an admin invites a user.
+  inviteSubject: Controle-share-videos-v1.0 invite
+  #Message which gets sent when an admin invites a user. {url} will be replaced with the invite URL, {email} with the email and {password} with the users password.
+  inviteMessage: >-
+    Hey!
+
+
+    You were invited to Controle-share-videos-v1.0. Click this link to accept the invite:
+    {url}
+
+
+    You can use the email "{email}" and the password "{password}" to sign in.
+
+
+    Controle-share-videos-v1.0 🐧
+  #Whether to send an email to the share creator when an email recipient downloads a file. This requires SMTP and email recipient sharing.
+  enableShareDownloadNotifications: "false"
+  #Subject of the email which gets sent to the share creator when a recipient downloads a file.
+  shareDownloadNotificationSubject: Your file was downloaded
+  #Message which gets sent to the share creator when a recipient downloads a file. Available variables:
+  # {recipientEmail} - The email of the recipient
+  # {fileName} - The downloaded file name
+  # {shareUrl} - The URL of the share
+  shareDownloadNotificationMessage: |-
+    Hey!
+
+    {recipientEmail} downloaded {fileName} from your share: {shareUrl}
+
+    Controle-share-videos-v1.0 🐧
+smtp:
+  #Whether SMTP is enabled. Only set this to true if you entered the host, port, email, user and password of your SMTP server.
+  enabled: "false"
+  #Only set this to true if you need to trust self signed certificates.
+  allowUnauthorizedCertificates: "false"
+  #Host of the SMTP server
+  host: ""
+  #Port of the SMTP server
+  port: "0"
+  #Email address from which the emails get sent
+  email: ""
+  #Username of the SMTP server
+  username: ""
+  #Password of the SMTP server
+  password: ""
+legal:
+  #Whether to show a link to imprint and privacy policy in the footer.
+  enabled: "false"
+  #The text which should be shown in the imprint. Supports Markdown. Leave blank to link to an external imprint page.
+  imprintText: ""
+  #If you already have an imprint page you can link it here instead of using the text field.
+  imprintUrl: ""
+  #The text which should be shown in the privacy policy. Supports Markdown. Leave blank to link to an external privacy policy page.
+  privacyPolicyText: ""
+  #If you already have a privacy policy page you can link it here instead of using the text field.
+  privacyPolicyUrl: ""
+#This configuration is used to create the initial user when the application is started for the first time.
+#Make sure to change at least the password as soon as you log in!
+initUser:
+  enabled: false
+  username: admin
+  email: admin@example.com
+  #VULN-23: use a strong password (letters + digits, min. 8 chars) and rotate
+  #it right after the first login. Never ship this file with a real password.
+  password: CHANGE-ME-before-enabling-initUser
+  isAdmin: true

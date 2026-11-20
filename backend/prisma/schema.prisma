@@ -1,0 +1,356 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "./generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  username           String  @unique
+  email              String  @unique
+  password           String?
+  isAdmin            Boolean @default(false)
+  role               String  @default("operador")
+  shareSizeLimit     BigInt?
+  passwordMustChange Boolean @default(false)
+
+  shares        Share[]
+  refreshTokens RefreshToken[]
+  sessions      Session[]
+  loginTokens   LoginToken[]
+  recoveryCodes RecoveryCode[]
+  auditLogs     AuditLog[]
+
+  // Access review (issue #11, 2.4.2/2.4.3)
+  lastReviewedAt DateTime?
+  reviewedBy     String?
+
+  accessReviews AccessReview[]
+
+  totpEnabled        Boolean             @default(false)
+  totpVerified       Boolean             @default(false)
+  totpSecret         String?
+  resetPasswordToken ResetPasswordToken?
+
+  isActivated              Boolean   @default(true)
+  activationToken          String?   @unique
+  activationTokenExpiresAt DateTime?
+
+  // BDB-02: caminho quente do job deleteUnactivatedUsers
+  // (isActivated=false AND createdAt<threshold)
+  @@index([isActivated, createdAt])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  // TOKEN-HASH: persistido apenas como SHA-256 (hashToken()). O @default(uuid())
+  // foi removido (P1-05): nenhum valor em texto claro deve existir — o service
+  // sempre passa explicitamente o hash do token gerado.
+  token     String   @unique
+  createdAt DateTime @default(now())
+
+  expiresAt DateTime
+
+  // SEC-1.2/15.4: marco da última autenticação forte (senha+2FA ou
+  // reautenticação). Operações críticas exigem reautenticação recente.
+  reauthenticatedAt DateTime?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // SEC-1.2/§6-§11: sessão de acesso server-side (token opaco de 256 bits,
+  // armazenado somente como hash SHA-256). Uma sessão de acesso por refresh
+  // token; rotação/revogação do refresh cascateiam para a sessão.
+  session Session?
+}
+
+// SEC-1.2/§6-§7-§10-§11 (Fase 4) — Sessão de acesso server-side.
+//
+// O token real (256 bits) nunca é armazenado — apenas token_hash (SHA-256).
+// A validação por requisição segue: cookie -> hash -> lookup -> revogado?
+// -> expirado? -> usuário ativo? -> autorização (§10). Expiração absoluta
+// (expiresAt) e timeout por inatividade (lastActivityAt + idle) (§11).
+model Session {
+  id             String    @id @default(uuid())
+  tokenHash      String    @unique
+  userId         String
+  refreshTokenId String    @unique
+  createdAt      DateTime  @default(now())
+  lastActivityAt DateTime  @default(now())
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  ipAddress      String?
+  userAgent      String?
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken RefreshToken @relation(fields: [refreshTokenId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// P0-01 (Plano de correções 2026-11-03): token do segundo fator persistido
+// apenas como SHA-256 (`tokenHash`), mesmo contrato dos tokens opacos de
+// acesso/refresh. O valor em texto puro é retornado uma única vez ao cliente e
+// expira em 5 minutos.
+model LoginToken {
+  tokenHash String   @id
+  createdAt DateTime @default(now())
+
+  expiresAt DateTime
+
+  userId String
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  used   Boolean @default(false)
+
+  // Índice já presente em 20261103000000_login_token_hash (lookups por userId
+  // em logoutAllDevices/createLoginToken). Sem esta declaração o Prisma
+  // detecta drift e gera migração de DROP INDEX espúria.
+  @@index([userId])
+}
+
+// SEC-1.2/15.3: recovery codes de uso único para o segundo fator. Apenas o
+// hash SHA-256 é armazenado; o valor em texto puro é exibido uma única vez na
+// ativação do TOTP.
+model RecoveryCode {
+  id        String    @id @default(uuid())
+  codeHash  String    @unique
+  createdAt DateTime  @default(now())
+  usedAt    DateTime?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // SEC-1.2/15.3: consumo por código de uso único.
+  @@index([userId])
+}
+
+model ResetPasswordToken {
+  token     String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  expiresAt DateTime
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Share {
+  id        String    @id @default(uuid())
+  createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
+
+  name          String?
+  uploadLocked  Boolean   @default(false)
+  isZipReady    Boolean   @default(false)
+  views         Int       @default(0)
+  downloads     Int       @default(0)
+  expiration    DateTime?
+  description   String?
+  removedReason String?
+
+  creatorId String?
+  creator   User?   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  security ShareSecurity?
+
+  shareTokens ShareToken[]
+
+  recipients      ShareRecipient[]
+  files           File[]
+  storageProvider String           @default("LOCAL")
+
+  // BDB-02: orderBy expiration desc (getShares, getSharesByUser) e
+  // where expiration { lt / gt } (jobs.deleteExpiredShares).
+  @@index([expiration])
+  // BDB-02: getSharesByUser filtra por (creatorId, uploadLocked) e
+  // ordena por expiration; composite economiza table scan + sort.
+  @@index([creatorId, uploadLocked, expiration])
+}
+
+model ShareRecipient {
+  id    String @id @default(uuid())
+  email String
+
+  shareId String
+  share   Share  @relation(fields: [shareId], references: [id], onDelete: Cascade)
+
+  // BDB-02: join share→recipients (include em getShares/getSharesByUser)
+  // BDB-06: impede duplicidade de destinatário por share (P2/P3 de código)
+  @@unique([shareId, email])
+  @@index([shareId])
+}
+
+model File {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  name        String
+  size        BigInt
+  description String?
+
+  // AUD-ENRICH: hash SHA-256 do arquivo persistido na geração do certificado
+  // (original pré-embutido para vídeos assinados). Reutilizado nos download
+  // logs sem recálculo (leitura integral do arquivo é cara).
+  sha256 String?
+
+  shareId String
+  share   Share  @relation(fields: [shareId], references: [id], onDelete: Cascade)
+
+  // BDB-02: join share→files (include em getShares/getSharesByUser/get)
+  @@index([shareId])
+}
+
+model ShareSecurity {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  password     String?
+  maxViews     Int?
+  maxDownloads Int?
+
+  shareId String @unique
+  share   Share  @relation(fields: [shareId], references: [id], onDelete: Cascade)
+}
+
+// SEC §23: share tokens são opacos (256 bits de entropia) e armazenados como
+// SHA-256. revokedAt invalida tokens ao trocar a senha do share (revogação em
+// lote via updateMany) sem depender de assinatura.
+model ShareToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  shareId   String
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  ipAddress String?
+  userAgent String?
+
+  share Share @relation(fields: [shareId], references: [id], onDelete: Cascade)
+
+  // SEC-07: verifyShareToken faz lookup por shareId → tokenHash (banco first).
+  @@index([shareId])
+}
+
+model Config {
+  updatedAt DateTime @updatedAt
+
+  name         String
+  category     String
+  type         String
+  defaultValue String  @default("")
+  value        String?
+  obscured     Boolean @default(false)
+  secret       Boolean @default(true)
+  locked       Boolean @default(false)
+  order        Int
+
+  @@id([name, category])
+}
+
+model DownloadLog {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  shareId  String
+  fileId   String?
+  fileName String
+  fileSize String?
+
+  // AUD-ENRICH: contexto e rastreabilidade adicionais do evento.
+  fileHash        String?
+  shareName       String?
+  creatorUsername String?
+  recipientId     String?
+  recipientEmail  String?
+  mimeType        String?
+  referer         String?
+  durationMs      Int?
+  transferBytes   String?
+  authMethod      String?
+  httpStatus      Int?
+
+  userId   String?
+  username String?
+  ip       String
+
+  userAgent String?
+
+  success Boolean
+  reason  String?
+
+  event String @default("download")
+
+  // GAP-02: correlation id propagated from X-Request-Id header so audit rows
+  // can be joined back to application logs. Nullable for rows created before
+  // the column existed (migration backfills NULL) and for background jobs.
+  requestId String?
+
+  @@index([shareId])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([event])
+  @@index([requestId])
+}
+
+// SEC-1.2/§29 (Fase 5) — Trilha de auditoria. Nunca armazenar senha, token,
+// cookie, refresh token ou código MFA (§29.1). Campos conforme §29.3: timestamp
+// UTC, event_type, user_id, session_id interno, request_id, IP, User-Agent,
+// recurso, resultado.
+model AuditLog {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  eventType String
+  userId    String?
+  sessionId String?
+  resource  String?
+  result    String?
+  metadata  String?
+
+  ipAddress String?
+  userAgent String?
+  requestId String?
+
+  // WORM (issue #10, 2.3.2): hash chain p/ tamper-evidence.
+  // Linhas anteriores à migração ficam com NULL e ficam fora da chain.
+  sequenceNumber Int?    @unique
+  previousHash   String?
+  currentHash    String?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // BDB-02: admin de auditoria filtra por (createdAt) e (eventType);
+  // join user é por FK.
+  @@index([createdAt])
+  @@index([eventType])
+  @@index([userId])
+  @@index([requestId])
+  @@index([previousHash, currentHash])
+}
+
+// Access review (issue #11, 2.4.3): atestação assinada de revisão de acesso.
+model AccessReview {
+  id         String   @id @default(uuid())
+  createdAt  DateTime @default(now())
+  reviewedAt DateTime
+
+  userId     String
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewerId String
+  certified  Boolean
+  notes      String?
+
+  // HMAC-SHA256 do payload da atestação (chave do servidor)
+  signature String
+
+  @@index([userId])
+  @@index([reviewedAt])
+}

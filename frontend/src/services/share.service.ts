@@ -1,0 +1,318 @@
+import mime from "mime-types";
+import { FileUploadResponse } from "../types/File.type";
+import {
+  Page,
+  PaginationParams,
+  toPaginationQuery,
+} from "../types/page.type";
+
+import {
+  CreateShare,
+  MyShare,
+  Share,
+  ShareMetaData,
+  UpdateShare,
+} from "../types/share.type";
+import api from "./api.service";
+
+const isValidId = (id: string) => {
+  return /^[a-zA-Z0-9-]+$/.test(id);
+};
+
+/**
+ * R03 (v1.2.0 breaking): `GET /api/shares/all` agora retorna um envelope
+ * paginado `Page<AdminShare>` em vez de um array puro.
+ */
+const list = async (params?: PaginationParams): Promise<Page<MyShare>> => {
+  return (await api.get(`shares/all`, { params: toPaginationQuery(params) })).data;
+};
+
+const create = async (share: CreateShare) => {
+  return (await api.post("shares", share)).data;
+};
+
+const completeShare = async (id: string) => {
+  if (!isValidId(id)) throw new Error("Invalid ID");
+  const response = (await api.post(`shares/${id}/complete`)).data;
+  return response;
+};
+
+const revertComplete = async (id: string) => {
+  if (!isValidId(id)) throw new Error("Invalid ID");
+  return (await api.delete(`shares/${id}/complete`)).data;
+};
+
+const get = async (id: string): Promise<Share> => {
+  if (!isValidId(id)) throw new Error("Invalid ID");
+  return (await api.get(`shares/${id}`)).data;
+};
+
+const getFromOwner = async (id: string): Promise<Share> => {
+  if (!isValidId(id)) throw new Error("Invalid ID");
+  return (await api.get(`shares/${id}/from-owner`)).data;
+};
+
+const getMetaData = async (id: string): Promise<ShareMetaData> => {
+  if (!isValidId(id)) throw new Error("Invalid ID");
+  return (await api.get(`shares/${id}/metaData`)).data;
+};
+
+const remove = async (id: string) => {
+  if (!isValidId(id)) throw new Error("Invalid ID");
+  await api.delete(`shares/${id}`);
+};
+
+const update = async (id: string, share: UpdateShare): Promise<MyShare> => {
+  if (!isValidId(id)) throw new Error("Invalid ID");
+  return (await api.patch(`shares/${id}`, share)).data;
+};
+
+const expire = async (id: string) => {
+  if (!isValidId(id)) throw new Error("Invalid ID");
+  await api.post(`shares/${id}/expire`);
+};
+
+/**
+ * R03 (v1.2.0 breaking): `GET /api/shares` agora retorna um envelope
+ * paginado `Page<MyShare>` em vez de um array puro.
+ */
+const getMyShares = async (
+  params?: PaginationParams,
+): Promise<Page<MyShare>> => {
+  return (await api.get("shares", { params: toPaginationQuery(params) })).data;
+};
+
+const getShareToken = async (id: string, password?: string) => {
+  if (!isValidId(id)) throw new Error("Invalid ID");
+  await api.post(`/shares/${id}/token`, { password });
+};
+
+const isShareIdAvailable = async (id: string): Promise<boolean> => {
+  if (!isValidId(id)) throw new Error("Invalid Share ID");
+  return (await api.get(`/shares/isShareIdAvailable/${id}`)).data.isAvailable;
+};
+
+const getBaseName = (fileName: string) => {
+  const parts = fileName.split("/");
+  return parts[parts.length - 1] || fileName;
+};
+
+const canBrowserPlayMime = (mimeType: string): boolean => {
+  if (mimeType.startsWith("video/")) {
+    return typeof document !== "undefined" &&
+      document.createElement("video").canPlayType(mimeType) !== "";
+  }
+  if (mimeType.startsWith("audio/")) {
+    return typeof document !== "undefined" &&
+      document.createElement("audio").canPlayType(mimeType) !== "";
+  }
+  return true;
+};
+
+const doesFileSupportPreview = (fileName: string) => {
+  const mimeType = (mime.contentType(getBaseName(fileName)) || "").split(";")[0];
+
+  if (!mimeType) return false;
+
+  if (!canBrowserPlayMime(mimeType)) return false;
+
+  const supportedMimeTypes = [
+    mimeType.startsWith("video/"),
+    mimeType.startsWith("image/"),
+    mimeType.startsWith("audio/"),
+    mimeType.startsWith("text/"),
+    mimeType == "application/pdf",
+  ];
+
+  return supportedMimeTypes.some((isSupported) => isSupported);
+};
+
+const isShareTextFile = (fileName: string) => {
+  const mimeType = (mime.contentType(getBaseName(fileName)) || "").split(";")[0];
+
+  if (!mimeType) return false;
+
+  return mimeType.startsWith("text/");
+};
+
+const downloadFile = async (
+  shareId: string,
+  fileId: string,
+  recipientId?: string,
+) => {
+  const recipientQuery = recipientId
+    ? `?recipient=${encodeURIComponent(recipientId)}`
+    : "";
+  const url = `${window.location.origin}/api/shares/${shareId}/files/${fileId}${recipientQuery}`;
+
+  const response = await fetch(url, { credentials: "same-origin" });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const error = new Error(data.message || "Download failed") as Error & {
+      response?: { data: { error?: string; message?: string } };
+    };
+    error.response = { data };
+    throw error;
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition");
+  const fileName = disposition
+    ? disposition.split("filename=")[1]?.replace(/"/g, "")
+    : fileId;
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(blobUrl);
+};
+
+const fetchCertificate = async (
+  shareId: string,
+  fileId: string,
+): Promise<{ blob: Blob; fileName: string }> => {
+  const url = `${window.location.origin}/api/shares/${shareId}/files/${fileId}/certificate`;
+
+  const response = await fetch(url, { credentials: "same-origin" });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const error = new Error(data.message || "Download failed") as Error & {
+      response?: { data: { error?: string; message?: string } };
+    };
+    error.response = { data };
+    throw error;
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition");
+  const fileName = disposition
+    ? disposition.split("filename=")[1]?.replace(/"/g, "")
+    : fileId;
+  return { blob, fileName };
+};
+
+const downloadCertificate = async (shareId: string, fileId: string) => {
+  const { blob, fileName } = await fetchCertificate(shareId, fileId);
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(blobUrl);
+};
+
+const fetchCertificatesZip = async (
+  shareId: string,
+): Promise<{ blob: Blob; fileName: string }> => {
+  const url = `${window.location.origin}/api/shares/${shareId}/files/certificates-zip`;
+
+  const response = await fetch(url, { credentials: "same-origin" });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const error = new Error(data.message || "Download failed") as Error & {
+      response?: { data: { error?: string; message?: string } };
+    };
+    error.response = { data };
+    throw error;
+  }
+
+  const blob = await response.blob();
+  return { blob, fileName: `${shareId}.certificados.zip` };
+};
+
+// SEC-UX/BUGFIX: navegadores bloqueiam downloads automáticos múltiplos —
+// disparar N <a download> em loop entrega apenas o primeiro. Com vários
+// vídeos, os certificados vão todos em UM zip preservando as pastas.
+const downloadCertificatesZip = async (shareId: string) => {
+  const { blob, fileName } = await fetchCertificatesZip(shareId);
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(blobUrl);
+};
+
+const removeFile = async (shareId: string, fileId: string) => {
+  if (!isValidId(shareId)) throw new Error("Invalid Share ID");
+  await api.delete(`shares/${shareId}/files/${fileId}`);
+};
+
+const uploadFile = async (
+  shareId: string,
+  chunk: Blob,
+  file: {
+    id?: string;
+    name: string;
+    description?: string;
+  },
+  chunkIndex: number,
+  totalChunks: number,
+  onProgress?: (progress: number) => void,
+  signal?: AbortSignal,
+): Promise<FileUploadResponse> => {
+  if (!isValidId(shareId)) throw new Error("Invalid Share ID");
+  return (
+    await api.post(`shares/${shareId}/files`, chunk, {
+      headers: { "Content-Type": "application/octet-stream" },
+      // Permite abortar o chunk em andamento quando o usuário cancela.
+      signal,
+      params: {
+        id: file.id,
+        name: file.name,
+        description: file.description,
+        chunkIndex,
+        totalChunks,
+      },
+      // Progresso byte-level do chunk atual (requer XHR; desabilita o
+      // retry automático do axios ao enviar, que quebraria o chunking).
+      onUploadProgress: onProgress
+        ? (e) => {
+            if (!e.total) return;
+            const chunkFraction = e.loaded / e.total;
+            onProgress(
+              Math.min(
+                99.9,
+                ((chunkIndex + chunkFraction) / totalChunks) * 100,
+              ),
+            );
+          }
+        : undefined,
+    })
+  ).data;
+};
+
+export default {
+  list,
+  create,
+  completeShare,
+  revertComplete,
+  getShareToken,
+  get,
+  getFromOwner,
+  update,
+  remove,
+  expire,
+  getMetaData,
+  doesFileSupportPreview,
+  isShareTextFile,
+  getMyShares,
+  isShareIdAvailable,
+  downloadFile,
+  downloadCertificate,
+  fetchCertificatesZip,
+  downloadCertificatesZip,
+  fetchCertificate,
+  removeFile,
+  uploadFile,
+};

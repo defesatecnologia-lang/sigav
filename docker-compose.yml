@@ -1,0 +1,115 @@
+services:
+  backend:
+    container_name: controle-share-videos-backend
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    # Bridge network (default) instead of host mode (INFRA-HIGH-02)
+    networks:
+      - app-network
+    # Healthcheck for orchestrator (INFRA-HIGH-02)
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    # Resource limits (INFRA-HIGH-02)
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+        reservations:
+          memory: 512M
+          cpus: "0.5"
+    # Trust proxy for correct client IP behind Caddy (MED-02)
+    environment:
+      - TRUST_PROXY=true
+      - NODE_ENV=production
+      - BACKEND_PORT=8080
+      - DATABASE_URL=file:/opt/app/data/controle-videos.db
+      - DATA_DIRECTORY=/opt/app/data
+      # CORS origin must be set explicitly for production (MED-02). Defaults
+      # to https://<DOMAIN>; override with CORS_ORIGIN=http://<ip> for IP access.
+      - CORS_ORIGIN=${CORS_ORIGIN:-https://${DOMAIN}}
+      # Admin bootstrap user (seeded by user.seed.ts). No Docker secrets —
+      # pass via env (e.g. .env file or `docker compose run -e`). Do NOT
+      # hardcode credentials in version control.
+      - ADMIN_EMAIL=${ADMIN_EMAIL:?ADMIN_EMAIL is required.}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required. Generate with openssl rand -base64 32.}
+    volumes:
+      - backend-data:/opt/app/data
+      - frontend-images:/opt/app/frontend/public/img
+
+  frontend:
+    container_name: controle-share-videos-frontend
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend-runner
+      args:
+        # Versão exibida no rodapé (derive do git e exporte antes do build).
+        - APP_VERSION=${APP_VERSION:-}
+    restart: unless-stopped
+    networks:
+      - app-network
+    # Start the Next.js standalone server (runtime stage does not define a CMD)
+    command: ["sh", "-c", "cd /opt/app/frontend && PORT=3333 HOSTNAME=0.0.0.0 node server.js"]
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:3333"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    environment:
+      - JWT_SECRET=${JWT_SECRET}
+      - NODE_ENV=production
+      - PORT=3333
+      - HOSTNAME=0.0.0.0
+      - API_URL=${API_URL:-https://${DOMAIN}/api}
+    volumes:
+      - frontend-images:/opt/app/frontend/public/img
+
+  caddy:
+    container_name: controle-share-videos-caddy
+    build:
+      context: ./reverse-proxy
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - app-network
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    environment:
+      - DOMAIN=${DOMAIN}
+      - ACME_EMAIL=${ACME_EMAIL}
+    volumes:
+      # CADDYFILE seleciona a config do Caddy: prod (TLS Let's Encrypt,
+      # default) | ip (HTTP/IP, Caddyfile.ip) | local (homologação, porta 3000).
+      - ./reverse-proxy/Caddyfile.${CADDYFILE:-prod}:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - backend
+      - frontend
+
+networks:
+  app-network:
+    driver: bridge
+    name: controle-share-videos-network
+
+volumes:
+  backend-data:
+    name: controle-share-videos-backend-data
+  frontend-images:
+    name: controle-share-videos-frontend-images
+  caddy-data:
+    name: controle-share-videos-caddy-data
+  caddy-config:
+    name: controle-share-videos-caddy-config

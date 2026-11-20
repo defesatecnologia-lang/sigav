@@ -1,0 +1,81 @@
+import { ActionIcon, TextInput, Tooltip } from "@mantine/core";
+import { useRef, useState } from "react";
+import { IoOpenOutline } from "react-icons/io5";
+import { TbCheck, TbCopy, TbQrcode } from "react-icons/tb";
+import useTranslate from "../../hooks/useTranslate.hook";
+import toast from "../../utils/toast.util";
+import { copyToClipboard } from "../../utils/clipboard.util";
+
+function CopyTextField(props: { link: string; toggleQR?: () => void }) {
+  const t = useTranslate();
+
+  const [checkState, setCheckState] = useState(false);
+  const timerRef = useRef<number | ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+
+  const copyLink = async () => {
+    const ok = await copyToClipboard(props.link);
+    if (ok) {
+      toast.success(t("common.notify.copied-link"));
+    } else {
+      toast.error(t("common.notify.copy-error"));
+    }
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      setCheckState(false);
+    }, 1500);
+    setCheckState(true);
+  };
+
+  return (
+    <TextInput
+      readOnly
+      label={t("common.text.link")}
+      variant="filled"
+      value={props.link}
+      onClick={copyLink}
+      rightSectionWidth={90}
+      rightSection={
+        <div style={{ display: "flex", alignItems: "center" }}>
+          <Tooltip
+            label={t("common.text.navigate-to-link")}
+            position="top"
+            offset={-2}
+            openDelay={200}
+          >
+            <a href={props.link}>
+              <ActionIcon>
+                <IoOpenOutline />
+              </ActionIcon>
+            </a>
+          </Tooltip>
+
+          <Tooltip
+            label={t("common.button.clickToCopy")}
+            position="top"
+            offset={-2}
+            openDelay={200}
+          >
+            <ActionIcon onClick={copyLink}>
+              {checkState ? <TbCheck /> : <TbCopy />}
+            </ActionIcon>
+          </Tooltip>
+
+          <Tooltip
+            label={t("common.button.showQRCode")}
+            position="top"
+            offset={-2}
+            openDelay={200}
+          >
+            <ActionIcon onClick={props.toggleQR}>
+              <TbQrcode />
+            </ActionIcon>
+          </Tooltip>
+        </div>
+      }
+    />
+  );
+}
+
+export default CopyTextField;

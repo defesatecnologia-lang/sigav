@@ -1,0 +1,242 @@
+services:
+  backend:
+    container_name: controle-share-videos-backend
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    # Internal network only — no direct external access (INFRA-HIGH-02)
+    networks:
+      - backend-net
+    # Health check for orchestrator (INFRA-HIGH-02)
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    # Resource limits (INFRA-HIGH-02)
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+          pids: 512
+        reservations:
+          memory: 512M
+          cpus: "0.5"
+    # Logging with rotation (INFRA-HIGH-02)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    # Hardening: read-only root filesystem (Phase 2)
+    read_only: true
+    tmpfs:
+      - /tmp:size=256M
+      - /run:size=16M
+      - /var/cache:size=32M
+    # Hardening: capabilities, no-new-privileges, seccomp (Phase 1)
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./docker/seccomp/default.json
+    # Environment from secrets (INFRA-MED-04)
+    environment:
+      - NODE_ENV=production
+      - TRUST_PROXY=true
+      - BACKEND_PORT=8080
+      - DATABASE_URL=file:/opt/app/data/controle-videos.db
+      - DATA_DIRECTORY=/opt/app/data
+      - CADDY_DISABLED=true
+      # Admin bootstrap from Docker secrets (file-based env so seed reads them)
+      - ADMIN_EMAIL_FILE=/run/secrets/admin_email
+      - ADMIN_USERNAME_FILE=/run/secrets/admin_username
+      - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
+    # Secrets injected at runtime (INFRA-MED-04)
+    secrets:
+      - admin_email
+      - admin_username
+      - admin_password
+      - smtp_password
+      - acme_email
+      - domain
+      - jwt_secret
+    # Bind mount local disk — data lives outside the container lifecycle.
+    # Caminho host = caminho container (/opt/app/data) para simplificar backup
+    # e restore executados no host.
+    # (PLANO_HARDENING_DOCKER item 11) UID/GID consistente: host 1002:1002 =
+    # container 1002:1002 (create-user.sh defaults PUID=1002/PGID=1002; runner
+    # stage cria controle-user UID 1002). SELinux desativado no host → :z é
+    # no-op; mantém-se :z (label compartilhado) e não :Z porque backend e
+    # frontend montam o MESMO diretório images — :Z (private) causaria conflito
+    # de relabeling entre os dois containers em hosts SELinux.
+    volumes:
+      - /opt/app/data:/opt/app/data:rw,z
+      - /opt/app/data/images:/opt/app/frontend/public/img:rw,z
+    # Entrypoint runs migrations, seed, then starts servers via Caddy
+    entrypoint: ["sh", "./scripts/docker/create-user.sh"]
+    command: ["sh", "./scripts/docker/entrypoint.sh"]
+
+  frontend:
+    container_name: controle-share-videos-frontend
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend-runner
+      args:
+        # Versão exibida no rodapé; exportada pelo deploy-prod.sh a cada deploy.
+        - APP_VERSION=${APP_VERSION:-}
+    restart: unless-stopped
+    networks:
+      - backend-net
+    # Start the Next.js standalone server (runtime stage does not define a CMD)
+    command: ["sh", "-c", "cd /opt/app/frontend && PORT=3333 HOSTNAME=0.0.0.0 node server.js"]
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:3333"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+          pids: 512
+        reservations:
+          memory: 128M
+          cpus: "0.1"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    # Hardening: read-only root filesystem (Phase 2)
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+      - /run:size=8M
+    # Hardening: capabilities, no-new-privileges, seccomp (Phase 1)
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./docker/seccomp/default.json
+    environment:
+      - NODE_ENV=production
+      - PORT=3333
+      - HOSTNAME=0.0.0.0
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+    secrets:
+      - domain
+      - jwt_secret
+    # Bind mount to local disk — images shared with backend (host: 1002:1002).
+    # (PLANO_HARDENING_DOCKER item 11) :z (compartilhado) e não :Z porque o
+    # mesmo diretório também é montado pelo backend.
+    volumes:
+      - /opt/app/data/images:/opt/app/frontend/public/img:rw,z
+
+  caddy:
+    container_name: controle-share-videos-caddy
+    build:
+      context: ./reverse-proxy
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - backend-net
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+          pids: 512
+        reservations:
+          memory: 64M
+          cpus: "0.05"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    # Hardening: read-only root filesystem (Phase 2)
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    # Hardening: capabilities, no-new-privileges, seccomp (Phase 1)
+    # Caddy needs NET_BIND_SERVICE for binding to privileged ports 80/443
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./docker/seccomp/default.json
+    volumes:
+      # CADDYFILE seleciona a config do Caddy: prod (TLS Let's Encrypt,
+      # default) | ip (HTTP/IP, Caddyfile.ip) | local (porta 3000).
+      # Em Swarm, os secrets DOMAIN/ACME_EMAIL só são usados pelo Caddyfile.prod.
+      - ./reverse-proxy/Caddyfile.${CADDYFILE:-prod}:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    secrets:
+      - acme_email
+      - domain
+    environment:
+      - ACME_EMAIL_FILE=/run/secrets/acme_email
+      - DOMAIN_FILE=/run/secrets/domain
+
+networks:
+  # Internal network — containers can communicate but have no internet access
+  # and no direct external exposure. Only Caddy receives traffic via published
+  # host ports (80/443).
+  backend-net:
+    driver: bridge
+    name: controle-share-videos-backend
+    internal: true
+
+# Bind mounts replace named volumes so persistent data lives on the local
+# disk at /opt/app/data rather than in
+# /var/lib/docker/volumes. Only caddy-data and caddy-config remain as
+# named volumes (let's-encrypt state, not user data).
+volumes:
+  caddy-data:
+    driver: local
+  caddy-config:
+    driver: local
+
+secrets:
+  # These should be created externally via: echo "value" | docker secret create name -
+  # Or via Docker Swarm / Portainer / etc.
+  #
+  # Note: the JWT secret is now a Docker secret shared between backend and frontend.
+  # It is generated at first boot by backend/prisma/seed/config.seed.ts (internal.jwtSecret, locked)
+  # and stored in the database. For Docker Swarm, create it with:
+  #   echo "value" | docker secret create jwt_secret -
+  admin_email:
+    external: true
+  admin_username:
+    external: true
+  admin_password:
+    external: true
+  smtp_password:
+    external: true
+  acme_email:
+    external: true
+  domain:
+    external: true
+  jwt_secret:
+    external: true

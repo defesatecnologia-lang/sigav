@@ -1,0 +1,96 @@
+import { Group, Space, Text, Title } from "@mantine/core";
+import { useModals } from "@mantine/modals";
+import { useEffect, useState } from "react";
+import { FormattedMessage } from "react-intl";
+import Meta from "../../components/Meta";
+import AdminBackButton from "../../components/admin/AdminBackButton";
+import ManageShareTable from "../../components/admin/shares/ManageShareTable";
+import DiskUsage from "../../components/admin/shares/DiskUsage";
+import useTranslate from "../../hooks/useTranslate.hook";
+import shareService from "../../services/share.service";
+import { MyShare } from "../../types/share.type";
+import toast from "../../utils/toast.util";
+
+const Shares = () => {
+  // R03: list() agora retorna Page<MyShare>; consumimos .items.
+  // Cargo a primeira página com perPage=100 para preservar o UX atual
+  // (tabela única sem trocador de página — UI de paginação fica para follow-up).
+  const [shares, setShares] = useState<MyShare[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const modals = useModals();
+  const t = useTranslate();
+
+  const getShares = () => {
+    setIsLoading(true);
+    shareService
+      .list({ page: 1, perPage: 100 })
+      .then((page) => {
+        setShares(page.items);
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        toast.axiosError(err);
+        setIsLoading(false);
+      });
+  };
+
+  const deleteShare = (share: MyShare) => {
+    modals.openConfirmModal({
+      title: t("admin.shares.edit.delete.title", {
+        id: share.id,
+      }),
+      children: (
+        <Text size="sm">
+          <FormattedMessage id="admin.shares.edit.delete.description" />
+        </Text>
+      ),
+      labels: {
+        confirm: t("common.button.delete"),
+        cancel: t("common.button.cancel"),
+      },
+      confirmProps: { color: "red" },
+      onConfirm: async () => {
+        shareService
+          .remove(share.id)
+          .then(() => setShares(shares.filter((v) => v.id != share.id)))
+          .catch(toast.axiosError);
+      },
+    });
+  };
+
+  useEffect(() => {
+    getShares();
+  }, []);
+
+  return (
+    <>
+      <Meta title={t("admin.shares.title")} />
+      <Group justify="space-between" align="center" mb={20}>
+        <Group gap="md" align="center">
+          <AdminBackButton />
+          <Title mb={0} order={3}>
+            <FormattedMessage id="admin.shares.title" />
+          </Title>
+        </Group>
+        <DiskUsage />
+      </Group>
+
+      <ManageShareTable
+        shares={shares}
+        updateShare={(updatedShare) =>
+          setShares(
+            shares.map((share) =>
+              share.id === updatedShare.id ? updatedShare : share,
+            ),
+          )
+        }
+        deleteShare={deleteShare}
+        isLoading={isLoading}
+      />
+      <Space h="xl" />
+    </>
+  );
+};
+
+export default Shares;

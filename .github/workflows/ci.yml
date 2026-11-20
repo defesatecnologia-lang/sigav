@@ -1,0 +1,562 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "fix/*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+  packages: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  backend:
+    name: Backend (lint, build, unit, e2e)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build @controle-share/shared
+        working-directory: packages/shared
+        run: |
+          npm ci
+          npm run build
+
+      - name: Security audit @controle-share/shared
+        working-directory: packages/shared
+        run: npm audit --audit-level=high
+
+      - name: Security audit (block high/critical)
+        run: |
+          # GHSA-vfj7-8cjw-p6xm (braces — DoS por recursão em globs aninhados):
+          # sem versão corrigida upstream (todas as versões <=3.0.3 são
+          # vulneráveis; verificado em 2026-10-13). No frontend a cadeia é
+          # 100% dev-time (eslint-config-next -> @next/eslint-plugin-next ->
+          # fast-glob -> micromatch -> braces) e os padrões avaliados são
+          # paths internos do linter, sem input controlável por atacante.
+          # No backend a cadeia foi eliminada via override de chokidar@4 no
+          # nestjs-i18n; a exclusão é no-op lá. Remover quando upstream
+          # publicar correção.
+          # GHSA-fc5q-39xc-vjpf (picomatch — ReDoS via extglobs repetidos):
+          # sem versão corrigida upstream (<=4.0.7 vulneráveis,
+          # first_patched_version=null; 4.0.7 é a latest em 2026-11-17).
+          # Cadeia 100% dev-time/build-time: eslint (eslint-config-next ->
+          # @next/eslint-plugin-next -> fast-glob -> micromatch -> picomatch@2)
+          # e vitest/vite (picomatch@4); padrões são paths internos de linter e
+          # test runner, sem input controlável por atacante. `npm audit
+          # --omit=dev` do frontend = 0 vulnerabilidades. Remover quando
+          # upstream publicar correção (>4.0.7).
+          npm audit --audit-level=high --json > npm-audit.json || true
+          node -e '
+            const fs = require("fs");
+            const EXCLUDED = ["GHSA-vfj7-8cjw-p6xm", "GHSA-fc5q-39xc-vjpf"];
+            const a = JSON.parse(fs.readFileSync("npm-audit.json", "utf8"));
+            const vs = a.vulnerabilities || {};
+            const blocked = Object.entries(vs).filter(([name, v]) =>
+              ["high", "critical"].includes(v.severity) &&
+              v.via.some(x => typeof x === "object" &&
+                !EXCLUDED.some(id => (x.url || "").includes(id)))
+            );
+            if (blocked.length) {
+              for (const [name, v] of blocked)
+                console.error(`${v.severity.toUpperCase()} ${name} ${v.range}`);
+              process.exit(1);
+            }
+            console.log("Audit OK (GHSA excluida: " + EXCLUDED.join(", ") + ")");
+          '
+
+      - name: Verify signatures and provenance
+        run: npm audit signatures
+
+      - name: Check for Git/URL dependencies
+        run: |
+          # Check only dependencies sections for git/url protocols
+          # Allow file: dependencies that are relative paths (internal monorepo packages)
+          if node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+            
+            function checkDeps(deps) {
+              if (!deps) return [];
+              return Object.entries(deps).filter(([_, v]) => {
+                if (typeof v !== 'string') return false;
+                // Allow file: relative paths (internal packages like file:../packages/shared)
+                if (/^file:\.\.?\//.test(v)) return false;
+                return /^(git\+https?|git\+ssh|https?|file):/.test(v);
+              });
+            }
+            
+            const issues = [
+              ...checkDeps(pkg.dependencies),
+              ...checkDeps(pkg.devDependencies),
+              ...checkDeps(pkg.optionalDependencies),
+              ...checkDeps(lock.dependencies),
+              ...checkDeps(lock.packages)
+            ];
+            
+            if (issues.length > 0) {
+              console.log('Git/URL dependencies found:');
+              issues.forEach(([name, version]) => console.log(\`  \${name}: \${version}\`));
+              process.exit(1);
+            }
+          "; then
+            echo "No Git/URL dependencies detected"
+          else
+            echo "::warning::Git/URL dependencies detected - review required"
+            exit 1
+          fi
+
+      - name: Check for Git/URL dependencies (root + shared)
+        run: |
+          # P2-03 (PLANO-CORRECOES-2026-11-03): o backend é verificado acima e
+          # o frontend no job próprio; este step cobre o manifest raiz do
+          # monorepo e packages/shared (não cobertos por nenhum job).
+          # Allow file: relative paths (internal monorepo packages)
+          node -e '
+            const fs = require("fs");
+            const paths = ["../package.json", "../packages/shared/package.json"];
+            const models = ["dependencies", "devDependencies", "optionalDependencies"];
+            const issues = [];
+            for (const p of paths) {
+              if (!fs.existsSync(p)) continue;
+              const pkg = JSON.parse(fs.readFileSync(p, "utf8"));
+              for (const m of models) {
+                if (!pkg[m]) continue;
+                for (const [name, version] of Object.entries(pkg[m])) {
+                  if (typeof version !== "string") continue;
+                  // Allow relative file: paths (internal workspaces)
+                  if (/^file:\.\.?\//.test(version)) continue;
+                  if (/^(git\+https?|git\+ssh|https?|file):/.test(version))
+                    issues.push(`${p}  ${name}: ${version}`);
+                }
+              }
+            }
+            if (issues.length) {
+              console.log("Git/URL dependencies found:");
+              issues.forEach((i) => console.log("  " + i));
+              process.exit(1);
+            }
+          ' && echo "No Git/URL dependencies in root/shared manifests"
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Coverage
+        run: npm run test:coverage
+
+      - name: E2E tests
+        run: npm run test:e2e
+
+  # Issue #12 (2.5.1): dedicated security-e2e job — runs ONLY
+  # security.e2e-spec.ts (§35 scenarios) and publishes the report as an
+  # artifact. The backend job keeps running the full e2e suite.
+  security-e2e:
+    name: Security E2E (§35)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # NestJS 12 é ESM-only; o Jest 30 precisa de require(esm) nativo.
+      NODE_OPTIONS: --experimental-vm-modules
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build @controle-share/shared
+        working-directory: packages/shared
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run security e2e suite (report + JSON results)
+        run: |
+          set -o pipefail
+          npx jest --config test/jest-e2e.json --ci --runInBand \
+            --testPathPatterns=security \
+            --json --outputFile=security-e2e-results.json \
+            2>&1 | tee security-e2e.log
+
+      - name: Upload security e2e report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: security-e2e-report
+          path: |
+            backend/security-e2e-results.json
+            backend/security-e2e.log
+          retention-days: 30
+          if-no-files-found: error
+
+  frontend:
+    name: Frontend (lint, build, unit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build @controle-share/shared
+        working-directory: packages/shared
+        run: |
+          npm ci
+          npm run build
+
+      - name: Security audit @controle-share/shared
+        working-directory: packages/shared
+        run: npm audit --audit-level=high
+
+      - name: Security audit (block high/critical)
+        run: |
+          # GHSA-vfj7-8cjw-p6xm (braces — DoS por recursão em globs aninhados):
+          # sem versão corrigida upstream (todas as versões <=3.0.3 são
+          # vulneráveis; verificado em 2026-10-13). No frontend a cadeia é
+          # 100% dev-time (eslint-config-next -> @next/eslint-plugin-next ->
+          # fast-glob -> micromatch -> braces) e os padrões avaliados são
+          # paths internos do linter, sem input controlável por atacante.
+          # No backend a cadeia foi eliminada via override de chokidar@4 no
+          # nestjs-i18n; a exclusão é no-op lá. Remover quando upstream
+          # publicar correção.
+          # GHSA-mrhx-c7xc-m3w5 (zod — memory exhaustion em collections):
+          # fix em 4.6.6, mas a cadeia @serwist é 100% build-time (serwist/
+          # @serwist/next agora são devDependencies; `npm audit --omit=dev`
+          # do frontend = 0 vulnerabilidades) e o @serwist@9.5.13 fixa as
+          # versões de zod/glob de forma exata, sem fix upstream aplicável
+          # ainda. Remover quando @serwist atualizar zod/glob.
+          # GHSA-fc5q-39xc-vjpf (picomatch — ReDoS via extglobs repetidos):
+          # sem versão corrigida upstream (<=4.0.7 vulneráveis,
+          # first_patched_version=null; 4.0.7 é a latest em 2026-11-17).
+          # Cadeia 100% dev-time/build-time: eslint (eslint-config-next ->
+          # @next/eslint-plugin-next -> fast-glob -> micromatch -> picomatch@2)
+          # e vitest/vite (picomatch@4); padrões são paths internos de linter e
+          # test runner, sem input controlável por atacante. `npm audit
+          # --omit=dev` do frontend = 0 vulnerabilidades. Remover quando
+          # upstream publicar correção (>4.0.7).
+          npm audit --audit-level=high --json > npm-audit.json || true
+          node -e '
+            const fs = require("fs");
+            const EXCLUDED = ["GHSA-vfj7-8cjw-p6xm", "GHSA-mrhx-c7xc-m3w5", "GHSA-fc5q-39xc-vjpf"];
+            const a = JSON.parse(fs.readFileSync("npm-audit.json", "utf8"));
+            const vs = a.vulnerabilities || {};
+            const blocked = Object.entries(vs).filter(([name, v]) =>
+              ["high", "critical"].includes(v.severity) &&
+              v.via.some(x => typeof x === "object" &&
+                !EXCLUDED.some(id => (x.url || "").includes(id)))
+            );
+            if (blocked.length) {
+              for (const [name, v] of blocked)
+                console.error(`${v.severity.toUpperCase()} ${name} ${v.range}`);
+              process.exit(1);
+            }
+            console.log("Audit OK (GHSA excluida: " + EXCLUDED.join(", ") + ")");
+          '
+
+      - name: Verify signatures and provenance
+        run: npm audit signatures
+
+      - name: Check for Git/URL dependencies
+        run: |
+          # Check only dependencies sections for git/url protocols
+          # Allow file: dependencies that are relative paths (internal monorepo packages)
+          if node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+            
+            function checkDeps(deps) {
+              if (!deps) return [];
+              return Object.entries(deps).filter(([_, v]) => {
+                if (typeof v !== 'string') return false;
+                // Allow file: relative paths (internal packages like file:../packages/shared)
+                if (/^file:\.\.?\//.test(v)) return false;
+                return /^(git\+https?|git\+ssh|https?|file):/.test(v);
+              });
+            }
+            
+            const issues = [
+              ...checkDeps(pkg.dependencies),
+              ...checkDeps(pkg.devDependencies),
+              ...checkDeps(pkg.optionalDependencies),
+              ...checkDeps(lock.dependencies),
+              ...checkDeps(lock.packages)
+            ];
+            
+            if (issues.length > 0) {
+              console.log('Git/URL dependencies found:');
+              issues.forEach(([name, version]) => console.log(\`  \${name}: \${version}\`));
+              process.exit(1);
+            }
+          "; then
+            echo "No Git/URL dependencies detected"
+          else
+            echo "::warning::Git/URL dependencies detected - review required"
+            exit 1
+          fi
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Build
+        run: npm run build
+
+  docker-build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+        with:
+          # truffleHog usa o source `git` do próprio checkout: com clone
+          # raso (padrão, depth 1) ele não resolve os commits
+          # ("error chunking dir: unable to resolve commit") e escaneia 0
+          # chunks — o step passava verde sem analisar nada.
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Versão exibida no rodapé: o checkout tem fetch-depth: 0, então o git
+      # resolve tag + commits + sha curto (ex.: v1.0.0-142-g2dc1f11).
+      - name: Resolve app version from git
+        id: version
+        run: echo "value=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
+
+      - name: Build backend image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          target: backend-runner
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:test
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner (Backend image)
+        uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec # master
+        with:
+          scan-type: 'image'
+          scan-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:test'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+          # npm global embutido na imagem node é infra da imagem, não dep do
+          # app (falso positivo do Trivy ao varrer /usr/local/lib/node_modules)
+          skip-dirs: '/usr/local/lib/node_modules/npm'
+
+      - name: Build frontend image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          target: frontend-runner
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:test
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.value }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner (Frontend image)
+        uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec # master
+        with:
+          scan-type: 'image'
+          scan-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:test'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+          # npm global embutido na imagem node é infra da imagem, não dep do
+          # app (falso positivo do Trivy ao varrer /usr/local/lib/node_modules)
+          skip-dirs: '/usr/local/lib/node_modules/npm'
+
+      - name: Build combined image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          target: runner
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/combined:test
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.value }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner (Combined image)
+        uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec # master
+        with:
+          scan-type: 'image'
+          scan-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/combined:test'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+          # npm global embutido na imagem node é infra da imagem, não dep do
+          # app (falso positivo do Trivy ao varrer /usr/local/lib/node_modules)
+          skip-dirs: '/usr/local/lib/node_modules/npm'
+
+      - name: Secret scanning (truffleHog)
+        uses: trufflesecurity/trufflehog@421026a6540c63cf143ef53a5859389d473e88da # main
+        with:
+          path: ./
+          # Pin explícito: com `latest` o conjunto de detectores muda entre
+          # runs — o mesmo commit passou em um run e falhou em outro (falso
+          # positivo novo do detector TLy).
+          version: 3.99.8
+          # Ignora o falso positivo documentado em .trufflehog-exclude
+          # (PNG base64 embutido no favicon.svg).
+          extra_args: --json --exclude-paths .trufflehog-exclude
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          node-version: 24
+
+      - name: Install dependencies (shared)
+        working-directory: packages/shared
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install dependencies (backend)
+        working-directory: backend
+        run: npm ci
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Install dependencies (frontend)
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend for E2E
+        # As rewrites do Next são bakeadas em build-time; o harness do E2E
+        # valida que o build aponta para o backend de teste (:8181).
+        run: npm run e2e:build-frontend
+        working-directory: e2e
+
+      - name: Install dependencies (e2e)
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E
+        working-directory: e2e
+        run: npm run e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v5
+        with:
+          name: playwright-report
+          path: e2e/test-results/
+          retention-days: 7
+
+  deploy:
+    name: Deploy (produção)
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, e2e, docker-build]
+    # O deploy só roda quando a infraestrutura de produção está configurada:
+    # defina a variável de repositório DEPLOY_ENABLED=true e os secrets
+    # DEPLOY_HOST/DEPLOY_USER/DEPLOY_PORT/DEPLOY_SSH_KEY. Sem isso o job é
+    # pulado (evita falha de SSH exit 255 a cada push sem host de destino).
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      vars.DEPLOY_ENABLED == 'true'
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    environment: production
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      - name: Deploy via SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          TARGET_REF: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # Chave de deploy (deploy key) usada só neste job.
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # Envia o script de deploy (do próprio ref) via stdin para o host.
+          # O código executado é sempre o do commit deployado (checkout do
+          # workflow), não uma cópia pré-existente no host.
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=20 \
+            -p "${DEPLOY_PORT:-22}" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "APP_DIR='${APP_DIR:-/opt/controle-share-videos-v1.0}' RUN_BACKUP=1 TARGET_REF='${TARGET_REF}' bash -s" \
+            < scripts/deploy/deploy-prod.sh

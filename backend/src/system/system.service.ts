@@ -1,0 +1,38 @@
+import { Injectable, Logger } from "@nestjs/common";
+import checkDiskSpace from "check-disk-space";
+import { DATA_DIRECTORY } from "../constants";
+import { SystemInfoDTO } from "./dto/systemInfo.dto";
+import * as path from "path";
+
+@Injectable()
+export class SystemService {
+  private readonly logger = new Logger(SystemService.name);
+
+  async getSystemInfo(): Promise<SystemInfoDTO | null> {
+    const resolvedPath = path.resolve(DATA_DIRECTORY, "uploads");
+
+    try {
+      const diskSpace = await checkDiskSpace(resolvedPath);
+      return {
+        used: diskSpace.size - diskSpace.free,
+        total: diskSpace.size,
+      };
+    } catch (e) {
+      this.logger.warn(
+        `Failed to check disk space for ${resolvedPath}, falling back to root: ${(e as Error).message}`,
+      );
+      try {
+        const diskSpace = await checkDiskSpace("/");
+        return {
+          used: diskSpace.size - diskSpace.free,
+          total: diskSpace.size,
+        };
+      } catch (err) {
+        this.logger.error(
+          `Failed to check disk space even for root: ${(err as Error).message}`,
+        );
+        return null;
+      }
+    }
+  }
+}

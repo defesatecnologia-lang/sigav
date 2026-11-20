@@ -1,0 +1,20 @@
+{
+  "name": "scripts",
+  "version": "1.0.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elciomsantos/controle-share-videos-v1.0.git"
+  },
+  "description": "",
+  "scripts": {
+    "generate-example-config": "ts-node generate-example-config.ts"
+  },
+  "dependencies": {
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "ts-node": "^10.9.2"
+  }
+}

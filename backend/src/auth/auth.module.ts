@@ -1,0 +1,45 @@
+import { Global, Module } from "@nestjs/common";
+import { JwtModule } from "@nestjs/jwt";
+import { EmailModule } from "../email/email.module";
+import { AuthController } from "./auth.controller";
+import { AuthService } from "./auth.service";
+import { AuthTotpService } from "./authTotp.service";
+import { UserModule } from "../user/user.module";
+import { RolesGuard } from "./guard/roles.guard";
+import { PasswordMustChangeGuard } from "./guard/passwordMustChange.guard";
+import { JwtGuard } from "./guard/jwt.guard";
+import { ReauthGuard } from "./guard/reauth.guard";
+import { LoginService } from "./service/login.service";
+import { TokenService } from "./service/token.service";
+import { RefreshService } from "./service/refresh.service";
+import { SessionService } from "./service/session.service";
+import { VerificationService } from "./service/verification.service";
+import { RecoveryCodeService } from "./recovery-code.service";
+
+@Global()
+@Module({
+  imports: [
+    JwtModule.register({
+      global: true,
+    }),
+    EmailModule,
+    UserModule,
+  ],
+  controllers: [AuthController],
+  providers: [
+    AuthService,
+    AuthTotpService,
+    LoginService,
+    TokenService,
+    RefreshService,
+    SessionService,
+    VerificationService,
+    RecoveryCodeService,
+    JwtGuard,
+    RolesGuard,
+    PasswordMustChangeGuard,
+    ReauthGuard,
+  ],
+  exports: [AuthService, JwtGuard, RolesGuard, PasswordMustChangeGuard, SessionService, TokenService],
+})
+export class AuthModule {}

@@ -1,0 +1,608 @@
+import {
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  Inject,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from "@nestjs/common";
+import * as crypto from "crypto";
+import { fileTypeFromBuffer } from "file-type";
+import mime from "mime-types";
+import { I18nService } from "nestjs-i18n";
+import { ConfigService } from "../config/config.service";
+import { PrismaService } from "../prisma/prisma.service";
+import { RequestContextLogger } from "../common/request-context/request-context";
+import { validate as isValidUUID } from "uuid";
+import { Readable } from "stream";
+import { createZipStream, sanitizeZipEntryName } from "../common/zip";
+import { toBytes } from "@/shared/dto";
+import {
+  IUploadRepository,
+  type IUploadRepository as IUploadRepositoryType,
+} from "../storage/upload-repository.interface";
+
+@Injectable()
+export class LocalFileService {
+  private readonly logger = new RequestContextLogger(LocalFileService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private config: ConfigService,
+    private readonly i18n: I18nService,
+    @Inject(IUploadRepository)
+    private readonly repository: IUploadRepositoryType,
+  ) {}
+
+  async create(
+    data: string,
+    chunk: { index: number; total: number },
+    file: { id?: string; name: string; description?: string },
+    shareId: string,
+  ): Promise<{ id: string; name: string; description?: string }> {
+    if (!file.id) {
+      file.id = crypto.randomUUID();
+    } else if (!isValidUUID(file.id)) {
+      throw new BadRequestException(this.i18n.t("file.invalidIdFormat"));
+    }
+    const fileId: string = file.id;
+
+    // MIME-type allow-list for uploads (MED-06).
+    // GAP-01: in addition to the extension allowlist, magic bytes are
+    // validated on the final chunk (see create() below) so a .mp4 file whose
+    // bytes are actually an EXE is rejected regardless of the extension.
+    const ALLOWED_EXTENSIONS = new Set([
+      // Documents
+      ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+      ".odt", ".ods", ".odp", ".rtf", ".csv", ".tsv",
+      // Images
+      ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico",
+      // Videos
+      ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg",
+      // Audio
+      ".mp3", ".wav", ".flac", ".ogg", ".aac", ".wma", ".m4a",
+      // Archives
+      ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz",
+      // Text
+      ".txt", ".md", ".json", ".xml", ".yaml", ".yml", ".log",
+      // Code (允许; treated as text — not extracted/interpreted server-side)
+      ".js", ".ts", ".py", ".java", ".c", ".cpp", ".h", ".hpp", ".rb", ".php",
+      ".go", ".rs", ".sh", ".bat", ".ps1",
+      // Other installable media types — magic-byte validation guards against
+      // mislabeled executables (.exe/.elf would fail the declared-extension
+      // match below and be rejected).
+      ".iso", ".dmg", ".apk", ".msi",
+    ]);
+    const ext = file.name.substring(file.name.lastIndexOf(".")).toLowerCase();
+    if (!ALLOWED_EXTENSIONS.has(ext)) {
+      throw new BadRequestException(
+        `File extension "${ext}" is not allowed for upload`,
+      );
+    }
+
+    const share = await this.prisma.share.findUnique({
+      where: { id: shareId },
+      include: { files: true, creator: true },
+    });
+
+    if (!share)
+      throw new NotFoundException(this.i18n.t("file.notFound"));
+
+    if (share.uploadLocked)
+      throw new BadRequestException(this.i18n.t("file.alreadyCompleted"));
+
+    let diskFileSize: number;
+    try {
+      diskFileSize = (
+        await this.repository.statFile(`${shareId}/${file.id}.tmp-chunk`)
+      ).size;
+    } catch {
+      diskFileSize = 0;
+    }
+
+    // If the sent chunk index and the expected chunk index doesn't match throw an error
+    const chunkSize = this.config.getNumber("share.chunkSize");
+    const expectedChunkIndex = Math.ceil(diskFileSize / chunkSize);
+
+    if (expectedChunkIndex != chunk.index)
+      throw new BadRequestException({
+        message: this.i18n.t("file.unexpectedChunk"),
+        error: "unexpected_chunk_index",
+        expectedChunkIndex,
+      });
+
+    const buffer = Buffer.from(data, "base64");
+
+    // Check if there is enough space on the server
+    const availableSpace = await this.repository.availableSpaceBytes();
+    if (availableSpace < buffer.byteLength) {
+      throw new InternalServerErrorException(
+        this.i18n.t("file.notEnoughSpace"),
+      );
+    }
+
+    // Check if share size limit is exceeded
+    const fileSizeSum = share.files.reduce(
+      (n, { size }) => n + toBytes(size),
+      0,
+    );
+
+    const shareSizeSum = fileSizeSum + diskFileSize + buffer.byteLength;
+
+    const globalLimit = this.config.getNumber("share.maxSize");
+    const userLimit = share.creator?.shareSizeLimit != null
+      ? toBytes(share.creator.shareSizeLimit)
+      : undefined;
+    const limit = userLimit !== undefined ? Math.min(globalLimit, userLimit) : globalLimit;
+
+    if (shareSizeSum > limit) {
+      throw new HttpException(
+        this.i18n.t("file.maxSizeExceeded"),
+        HttpStatus.PAYLOAD_TOO_LARGE,
+      );
+    }
+
+    // GAP-01: per-file size limit, when configured (> 0 applies). Defends
+    // against a single huge upload consuming the entire share budget.
+    const maxFileSize = this.config.getNumber("share.maxFileSize");
+    if (maxFileSize > 0 && diskFileSize + buffer.byteLength > maxFileSize) {
+      throw new HttpException(
+        `File exceeds per-file size limit of ${maxFileSize} bytes`,
+        HttpStatus.PAYLOAD_TOO_LARGE,
+      );
+    }
+
+    await this.repository.appendBuffer(
+      `${shareId}/${file.id}.tmp-chunk`,
+      buffer,
+    );
+
+    const isLastChunk = chunk.index == chunk.total - 1;
+    if (isLastChunk) {
+      await this.repository.moveFile(
+        `${shareId}/${file.id}.tmp-chunk`,
+        `${shareId}/${file.id}`,
+      );
+      const fileSize = (
+        await this.repository.statFile(`${shareId}/${file.id}`)
+      ).size;
+
+      // GAP-01: validate real magic bytes against the declared extension to
+      // prevent polyglots / mislabeled payloads (e.g. .mp4 with EXE bytes).
+      // Sanity-sampled first 64 KiB for performance; file-type only needs a
+      // few kilobytes of header in practice. Skip when file-type cannot
+      // determine a type (very small / unknown formats) to avoid blocking
+      // legitimate uploads — the extension allowlist already filters by ext.
+      try {
+        const sample = await this.repository.readSample(
+          `${shareId}/${file.id}`,
+          Math.min(65536, fileSize),
+        );
+        const detected = await fileTypeFromBuffer(sample);
+        if (detected) {
+          if (!this.extensionMatchesType(ext, detected.ext)) {
+            // Roll back the rename so the malicious file isn't kept on disk.
+            await this.repository.unlinkIfExists(`${shareId}/${file.id}`);
+            throw new BadRequestException(
+              `File content does not match its extension "${ext}" (detected ${detected.ext}). Upload rejected.`,
+            );
+          }
+        }
+      } catch (e) {
+        // SEC-08: fail-closed on detection errors. Validation mismatches are
+        // re-thrown for the client; unexpected failures no longer fall through
+        // — a broken/malicious parser must never bypass the type check.
+        if (e instanceof BadRequestException) throw e;
+        this.logger.error(
+          `Magic-byte detection failed for file ${file.id}: ${e}`,
+        );
+        await this.repository.unlinkIfExists(`${shareId}/${file.id}`);
+        throw new BadRequestException(this.i18n.t("file.typeUnverified"));
+      }
+
+      await this.prisma.file.create({
+        data: {
+          id: file.id,
+          name: file.name,
+          size: fileSize,
+          description: file.description || null,
+          share: { connect: { id: shareId } },
+        },
+      });
+    }
+
+    return { ...file, id: fileId };
+  }
+
+  /**
+   * Map declared file extension to expected file-type extension family.
+   * Returns true when they're plausibly the same kind of content.
+   */
+  private extensionMatchesType(declaredExt: string, detectedExt: string): boolean {
+    const normalized = declaredExt.replace(/^\./, "").toLowerCase();
+    const detected = detectedExt.toLowerCase();
+
+    // Equivalent families (declared → acceptable detected extensions).
+    const families: Record<string, string[]> = {
+      jpg: ["jpg", "jpeg"],
+      jpeg: ["jpg", "jpeg"],
+      tif: ["tif", "tiff"],
+      tiff: ["tif", "tiff"],
+      m4v: ["mp4", "m4v"],
+      mp4: ["mp4", "m4v", "mov"],
+      mov: ["mov", "mp4"],
+      mpeg: ["mpg", "mpeg"],
+      mpg: ["mpg", "mpeg"],
+      htaccess: [],
+      txt: [],
+      md: [],
+      json: ["json"],
+      xml: ["xml"],
+      yml: ["yml", "yaml"],
+      yaml: ["yml", "yaml"],
+      log: [],
+      iso: [],
+      iso9660: ["iso"],
+    };
+
+    if (normalized === detected) return true;
+    const family = families[normalized] ?? [];
+    if (family.includes(detected)) return true;
+    // Conservative: when the detected type is in the allowlist above (image,
+    // video, audio, archive, office) we accept extension vs detected mismatch
+    // only within a known safe set, to avoid .jpg actually being .exe.
+    // If the detected extension is one known to be "active" (executable,
+    // document-with-macros) treat as mismatch unless already accounted for.
+    const activeTypes = new Set([
+      "exe",
+      "elf",
+      "msi",
+      "apk",
+      "dex",
+      "jar",
+      "class",
+      "macho",
+      "deb",
+      "rpm",
+      "jar",
+      "pdf", // PDF can carry JS — only accept when declared.
+    ]);
+    if (activeTypes.has(detected) && family.indexOf(detected) === -1) {
+      return false;
+    }
+    // Otherwise accept (e.g. mp3 with mp4 bytes / zip with 7z) — leniency
+    // keeps backwards compat for unusual but non-malicious uploads.
+    return true;
+  }
+
+  /**
+   * Resolve o caminho real no disco de um arquivo do share. Certificados são
+   * salvos como {videoId}.certificado.pdf (o registro de File do certificado
+   * tem id próprio), então o caminho é derivado do nome do arquivo. O mesmo
+   * vale para vídeos assinados, salvos como {videoId}.assinado.{ext}.
+   */
+  async resolveDiskPath(
+    shareId: string,
+    fileId: string,
+    fileName: string,
+  ): Promise<string> {
+    if (!fileName.endsWith(".certificado.pdf") && !/\.assinado\.\w+$/.test(fileName))
+      return `${shareId}/${fileId}`;
+
+    const originalName = fileName
+      .replace(/\.certificado\.pdf$/, "")
+      .replace(/\.assinado\.\w+$/, "");
+    const original = await this.prisma.file.findFirst({
+      where: { shareId, name: originalName },
+    });
+    const suffix = fileName.includes(".certificado.pdf")
+      ? ".certificado.pdf"
+      : fileName.slice(fileName.lastIndexOf(".assinado."));
+    return original
+      ? `${shareId}/${original.id}${suffix}`
+      : `${shareId}/${fileId}`;
+  }
+
+  async get(
+    shareId: string,
+    fileId: string,
+    range?: { start: number; end: number },
+  ) {
+    // SEC-IDOR: o lookup é sempre escopado pelo share da URL — um fileId de
+    // outro share deve resolver como 404, nunca operar cross-tenant.
+    const fileMetaData = await this.prisma.file.findFirst({
+      where: { id: fileId, shareId },
+    });
+
+    if (!fileMetaData)
+      throw new NotFoundException(this.i18n.t("file.notFound"));
+
+    const diskPath = await this.resolveDiskPath(
+      shareId,
+      fileId,
+      fileMetaData.name,
+    );
+
+    const file = this.repository.createReadStream(diskPath, {
+      // PERF-06: HTTP Range (206) support — serve only the requested byte
+      // window for video previews / seek or partial-download resumption.
+      start: range?.start,
+      end: range?.end,
+    });
+
+    return {
+      metaData: {
+        mimeType: mime.contentType(fileMetaData.name.split(".").pop() ?? "") || "application/octet-stream",
+        ...fileMetaData,
+        size: fileMetaData.size.toString(),
+      },
+      file,
+    };
+  }
+
+  async getFileMetaData(shareId: string, fileId: string) {
+    // SEC-IDOR: o lookup é sempre escopado pelo share da URL — um fileId de
+    // outro share deve resolver como 404, nunca operar cross-tenant.
+    const fileMetaData = await this.prisma.file.findFirst({
+      where: { id: fileId, shareId },
+    });
+
+    if (!fileMetaData)
+      throw new NotFoundException(this.i18n.t("file.notFound"));
+
+    return fileMetaData;
+  }
+
+  /**
+   * Retorna o certificado PDF gerado para um arquivo do share.
+   */
+  async getCertificate(shareId: string, fileId: string) {
+    // SEC-IDOR: o lookup é sempre escopado pelo share da URL — um fileId de
+    // outro share deve resolver como 404, nunca operar cross-tenant.
+    const fileMetaData = await this.prisma.file.findFirst({
+      where: { id: fileId, shareId },
+    });
+
+    if (!fileMetaData)
+      throw new NotFoundException(this.i18n.t("file.notFound"));
+
+    const relativePath = `${shareId}/${fileId}.certificado.pdf`;
+    const stats = await this.repository.statFile(relativePath);
+
+    const file = this.repository.createReadStream(relativePath);
+
+    return {
+      metaData: {
+        name: `${fileMetaData.name}.certificado.pdf`,
+        size: stats.size.toString(),
+        mimeType: "application/pdf",
+      },
+      file,
+    };
+  }
+
+  async remove(shareId: string, fileId: string) {
+    // SEC-IDOR: o lookup é sempre escopado pelo share da URL — um fileId de
+    // outro share deve resolver como 404, nunca operar cross-tenant.
+    const fileMetaData = await this.prisma.file.findFirst({
+      where: { id: fileId, shareId },
+    });
+
+    if (!fileMetaData)
+      throw new NotFoundException(this.i18n.t("file.notFound"));
+
+    const diskPath = await this.resolveDiskPath(
+      shareId,
+      fileId,
+      fileMetaData.name,
+    );
+    await this.repository.unlinkIfExists(diskPath);
+
+    await this.prisma.file.delete({ where: { id: fileId } });
+  }
+
+  async deleteAllFiles(shareId: string) {
+    await this.repository.removeShareDirectory(shareId);
+  }
+
+  async getZip(shareId: string): Promise<Readable> {
+    return new Promise((resolve, reject) => {
+      const zipStream = this.repository.createReadStream(
+        `${shareId}/archive.zip`,
+      );
+
+      zipStream.on("error", (err) => {
+        reject(new InternalServerErrorException(err));
+      });
+
+      zipStream.on("open", () => {
+        resolve(zipStream);
+      });
+    });
+  }
+
+  /**
+   * Streams a single file wrapped in a zip that preserves its uploaded
+   * relative folder path (e.g. "videos/trailer.mp4"), so a download keeps the
+   * same folder structure it was uploaded with. Falls back to a plain zip
+   * entry using only the file name when no folder was given.
+   */
+  async getFileZip(shareId: string, fileId: string): Promise<Readable> {
+    // SEC-IDOR: o lookup é sempre escopado pelo share da URL — um fileId de
+    // outro share deve resolver como 404, nunca operar cross-tenant.
+    const fileMetaData = await this.prisma.file.findFirst({
+      where: { id: fileId, shareId },
+    });
+
+    if (!fileMetaData)
+      throw new NotFoundException(this.i18n.t("file.notFound"));
+
+    const entryName = fileMetaData.name || fileId;
+
+    const diskPath = await this.resolveDiskPath(
+      shareId,
+      fileId,
+      fileMetaData.name,
+    );
+
+    return this.zipEntries([
+      { entryName, diskPath },
+    ]);
+  }
+
+  /**
+   * Streams um zip contendo TODOS os PDFs de certificado do share,
+   * preservando a estrutura de pastas via o nome amigável do vídeo de
+   * origem. Usado no fluxo pós-upload: navegadores bloqueiam downloads
+   * automáticos múltiplos, então N certificados são entregues em UM
+   * único download.
+   */
+  async getCertificatesZip(shareId: string): Promise<Readable> {
+    const dirEntries = await this.repository.listDirectory(shareId);
+    const certEntries = dirEntries.filter((entry) =>
+      entry.endsWith(".certificado.pdf"),
+    );
+    if (certEntries.length === 0)
+      throw new NotFoundException(this.i18n.t("file.notFound"));
+
+    const rows = await this.prisma.file.findMany({
+      where: { shareId },
+      select: { id: true, name: true },
+    });
+    const videoNameById = new Map(
+      rows
+        .filter((f) => !f.name.endsWith(".certificado.pdf"))
+        .map((f) => [f.id, f.name]),
+    );
+
+    const entries = certEntries.map((entry) => {
+      const originalId = entry.slice(0, -".certificado.pdf".length);
+      const friendlyName = videoNameById.get(originalId) ?? originalId;
+      return {
+        entryName: `${friendlyName}.certificado.pdf`,
+        diskPath: `${shareId}/${entry}`,
+      };
+    });
+
+    return this.zipEntries(entries);
+  }
+
+  /**
+   * Verifica se existe um certificado PDF para o arquivo (pelo nome base).
+   */
+  async hasCertificate(shareId: string, fileId: string): Promise<boolean> {    // SEC-IDOR: ver Achado em local.service — lookup escopado pelo share.
+    const fileMetaData = await this.prisma.file.findFirst({
+      where: { id: fileId, shareId },
+      select: { name: true },
+    });
+
+    if (!fileMetaData) return false;
+
+    const baseName = fileMetaData.name.replace(/\.assinado\.\w+$/, "");
+    const certFile = await this.prisma.file.findFirst({
+      where: { shareId, name: `${baseName}.certificado.pdf` },
+      select: { id: true },
+    });
+
+    return !!certFile;
+  }
+
+  /**
+   * Baixa um vídeo individual já com o certificado PDF correspondente anexado
+   * no mesmo zip. O certificado é localizado pelo nome base do arquivo
+   * (removendo sufixos ".assinado.<ext>"), para que vídeos originais e vídeos
+   * assinados recebam o mesmo PDF de autenticidade.
+   */
+  async getVideoWithCertificateZip(
+    shareId: string,
+    fileId: string,
+  ): Promise<Readable> {
+    // SEC-IDOR: o lookup é sempre escopado pelo share da URL — um fileId de
+    // outro share deve resolver como 404, nunca operar cross-tenant.
+    const fileMetaData = await this.prisma.file.findFirst({
+      where: { id: fileId, shareId },
+    });
+
+    if (!fileMetaData)
+      throw new NotFoundException(this.i18n.t("file.notFound"));
+
+    const diskPath = await this.resolveDiskPath(
+      shareId,
+      fileId,
+      fileMetaData.name,
+    );
+
+    const baseName = fileMetaData.name.replace(/\.assinado\.\w+$/, "");
+    const certFile = await this.prisma.file.findFirst({
+      where: { shareId, name: `${baseName}.certificado.pdf` },
+    });
+
+    const entries: { entryName: string; diskPath: string }[] = [
+      { entryName: fileMetaData.name, diskPath },
+    ];
+
+    if (certFile) {
+      const certDiskPath = await this.resolveDiskPath(
+        shareId,
+        certFile.id,
+        certFile.name,
+      );
+      entries.push({ entryName: certFile.name, diskPath: certDiskPath });
+    }
+
+    return this.zipEntries(entries);
+  }
+
+  private async zipEntries(
+    entries: { entryName: string; diskPath: string }[],
+  ): Promise<Readable> {
+    return new Promise((resolve, reject) => {
+      createZipStream({
+        zlib: { level: this.config.getNumber("share.zipCompressionLevel") },
+      }).then(
+        (archive) => {
+          let settled = false;
+          const settle = (err: unknown) => {
+            if (settled) return;
+            settled = true;
+            reject(err);
+          };
+
+          archive.on("error", (err: unknown) => {
+            settle(
+              new InternalServerErrorException(
+                err instanceof Error ? err.message : "Failed to create zip",
+              ),
+            );
+          });
+
+          archive.on("warning", (err: unknown) => {
+            this.logger.warn(`zip warning: ${String(err)}`);
+          });
+
+          for (const { entryName, diskPath } of entries) {
+            archive.append(
+              this.repository.createReadStream(diskPath),
+              // SEC-ZIPSLIP: nome saneado antes de entrar no central directory.
+              { name: sanitizeZipEntryName(entryName) },
+            );
+          }
+
+          // Resolve immediately after finalize: the Nest StreamableFile will
+          // pipe and consume the archive, which in turn emits its "end" event.
+          // Waiting for "end" here would deadlock, since the stream is not
+          // read until the promise resolves.
+          try {
+            void archive.finalize();
+          } catch (err) {
+            settle(err);
+            return;
+          }
+          resolve(archive);
+        },
+        (err) => reject(err),
+      );
+    });
+  }
+}

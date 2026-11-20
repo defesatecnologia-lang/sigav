@@ -1,0 +1,281 @@
+import {
+  ActionIcon,
+  Box,
+  Group,
+  Skeleton,
+  Stack,
+  Table,
+  TextInput,
+} from "@mantine/core";
+import { useModals } from "@mantine/modals";
+import { Dispatch, SetStateAction, useEffect, useState } from "react";
+import { TbDownload, TbEye, TbLink, TbClipboard } from "react-icons/tb";
+import { FormattedMessage } from "react-intl";
+import useConfig from "../../hooks/config.hook";
+import useTranslate from "../../hooks/useTranslate.hook";
+import shareService from "../../services/share.service";
+import { FileMetaData, FileRecord } from "../../types/File.type";
+import { Share } from "../../types/share.type";
+import { byteToHumanSizeString } from "../../utils/fileSize.util";
+import toast from "../../utils/toast.util";
+import { copyToClipboard } from "../../utils/clipboard.util";
+import { safeShareLinkBase } from "../../utils/safe-url.util";
+import TableSortIcon, { TableSort } from "../core/SortIcon";
+import showFilePreviewModal from "./modals/showFilePreviewModal";
+import showErrorModal from "./showErrorModal";
+import { HoverTip } from "../core/HoverTip";
+import api from "../../services/api.service";
+
+const renderFileName = (name: string) => {
+  const parts = name.split("/");
+  if (parts.length === 1) return name;
+  const fileName = parts.pop();
+  const folderPath = parts.join("/");
+  return (
+    <span>
+      <span style={{ opacity: 0.5 }}>{folderPath}/</span>
+      <span style={{ fontWeight: 600 }}>{fileName}</span>
+    </span>
+  );
+};
+
+const FileList = ({
+  files,
+  setShare,
+  share,
+  isLoading,
+  recipientId,
+}: {
+  files?: (FileMetaData | FileRecord)[];
+  setShare: Dispatch<SetStateAction<Share | undefined>>;
+  share: Share;
+  isLoading: boolean;
+  recipientId?: string;
+}) => {
+  const config = useConfig();
+  const modals = useModals();
+  const t = useTranslate();
+
+  const [sort, setSort] = useState<TableSort>({
+    property: "name",
+    direction: "desc",
+  });
+
+  const sortFiles = () => {
+    if (files && sort.property) {
+      const sortedFiles = files.sort((a: any, b: any) => {
+        const aValue = a[sort.property!] || "";
+        const bValue = b[sort.property!] || "";
+        if (sort.direction === "asc") {
+          return bValue.localeCompare(aValue, undefined, {
+            numeric: true,
+          });
+        } else {
+          return aValue.localeCompare(bValue, undefined, {
+            numeric: true,
+          });
+        }
+      });
+
+      setShare({
+        ...share,
+        files: sortedFiles,
+      });
+    }
+  };
+
+  const copyFileLink = async (file: FileMetaData | FileRecord) => {
+    const recipientQuery = recipientId
+      ? `?recipient=${encodeURIComponent(recipientId)}`
+      : "";
+    const link = `${safeShareLinkBase(config.get("general.appUrl") !== config.get("general.appUrl", true) ? config.get("general.appUrl") : undefined)}/api/shares/${
+      share.id
+    }/files/${file.id}${recipientQuery}`;
+
+    if (window.isSecureContext) {
+      const ok = await copyToClipboard(link);
+      if (ok) toast.success(t("common.notify.copied-link"));
+      else toast.error(t("common.notify.copy-error"));
+    } else {
+      modals.openModal({
+        title: t("share.modal.file-link"),
+        children: (
+          <Stack align="stretch">
+            <TextInput variant="filled" value={link} />
+          </Stack>
+        ),
+      });
+    }
+  };
+
+  useEffect(sortFiles, [sort]);
+
+  return (
+    <Box style={{ display: "block", overflowX: "auto" }}>
+      <Table>
+        <thead>
+          <tr>
+            <th>
+              <Group gap="xs">
+                <FormattedMessage id="share.table.name" />
+                <TableSortIcon sort={sort} setSort={setSort} property="name" />
+              </Group>
+            </th>
+            <th>
+              <Group gap="xs">
+                <FormattedMessage id="share.table.size" />
+                <TableSortIcon sort={sort} setSort={setSort} property="size" />
+              </Group>
+            </th>
+            <th>
+              <Group gap="xs">
+                <FormattedMessage id="share.table.description" />
+                <TableSortIcon sort={sort} setSort={setSort} property="description" />
+              </Group>
+            </th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {isLoading
+            ? skeletonRows
+            : files!.map((file) => (
+                <tr key={file.name}>
+                  <td>{renderFileName(file.name)}</td>
+                  <td>{byteToHumanSizeString(Number(file.size))}</td>
+                  <td>{file.description || "-"}</td>
+                  <td>
+                    <Group justify="flex-end" wrap="nowrap">
+                      {shareService.isShareTextFile(file.name) && (
+                        <HoverTip label={t("share.copy-text-contents")}>
+                          <ActionIcon
+                            color="blue"
+                            variant="light"
+                            size={25}
+                            onClick={async () => {
+                              try {
+                                const res = await api.get(
+                                  `/shares/${share.id}/files/${file.id}?download=false`,
+                                );
+                                if (window.isSecureContext) {
+                                  const ok = await copyToClipboard(res.data);
+                                  if (ok) {
+                                    toast.success(
+                                      t("share.notify.copied-contents"),
+                                    );
+                                  } else {
+                                    toast.error(
+                                      t("common.notify.copy-error"),
+                                    );
+                                  }
+                                } else {
+                                  toast.error(
+                                    t("share.notify.copy-not-supported-error"),
+                                  );
+                                }
+                              } catch (err) {
+                                toast.axiosError(err);
+                              }
+                            }}
+                          >
+                            <TbClipboard />
+                          </ActionIcon>
+                        </HoverTip>
+                      )}
+                      {shareService.doesFileSupportPreview(file.name) && (
+                        <HoverTip label={t("common.button.preview")}>
+                          <ActionIcon
+                            color="green"
+                            variant="light"
+                            size={25}
+                            onClick={() =>
+                              showFilePreviewModal(share.id, file, modals)
+                            }
+                          >
+                            <TbEye />
+                          </ActionIcon>
+                        </HoverTip>
+                      )}
+                      {!share.hasPassword && (
+                        <HoverTip label={t("common.button.copy-link")}>
+                          <ActionIcon
+                            color="victoria"
+                            variant="light"
+                            size={25}
+                            onClick={() => copyFileLink(file)}
+                          >
+                            <TbLink />
+                          </ActionIcon>
+                        </HoverTip>
+                      )}
+
+                      <HoverTip label={t("common.button.download")}>
+                        <ActionIcon
+                          color="cyan"
+                          variant="light"
+                          size={25}
+                          onClick={async () => {
+                            try {
+                              await shareService.downloadFile(
+                                share.id,
+                                file.id,
+                                recipientId,
+                              );
+                            } catch (e: any) {
+                              const error = e?.response?.data?.error;
+                              if (error === "share_max_downloads_exceeded") {
+                                showErrorModal(
+                                  modals,
+                                  t("share.error.download-limit-exceeded.title"),
+                                  t("share.error.download-limit-exceeded.description"),
+                                  "stay",
+                                  "/img/images/fechado-down.png",
+                                );
+                              } else if (error === "share_max_views_exceeded") {
+                                showErrorModal(
+                                  modals,
+                                  t("share.error.visitor-limit-exceeded.title"),
+                                  t("share.error.visitor-limit-exceeded.description"),
+                                  "stay",
+                                  "/img/images/fechado-down.png",
+                                );
+                              } else {
+                                toast.axiosError(e);
+                              }
+                            }
+                          }}
+                        >
+                          <TbDownload />
+                        </ActionIcon>
+                      </HoverTip>
+                    </Group>
+                  </td>
+                </tr>
+              ))}
+        </tbody>
+      </Table>
+    </Box>
+  );
+};
+
+const skeletonRows = [...Array(5)].map((c, i) => (
+  <tr key={i}>
+    <td>
+      <Skeleton height={30} width={30} />
+    </td>
+    <td>
+      <Skeleton height={14} />
+    </td>
+    <td>
+      <Skeleton height={14} />
+    </td>
+    <td>
+      <Skeleton height={14} />
+    </td>
+    <td>
+      <Skeleton height={25} width={25} />
+    </td>
+  </tr>
+));
+
+export default FileList;

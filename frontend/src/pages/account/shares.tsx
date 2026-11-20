@@ -1,0 +1,296 @@
+import {
+  ActionIcon,
+  Box,
+  Button,
+  Center,
+  Group,
+  Space,
+  Stack,
+  Table,
+  Text,
+  Title,
+} from "@mantine/core";
+import { useModals } from "@mantine/modals";
+import { dayjs, isEpochZero } from "../../utils/date.util";
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import {
+  TbPlusMinus,
+  TbInfoCircle,
+  TbLink,
+  TbLock,
+  TbTrash,
+} from "react-icons/tb";
+import { FormattedMessage } from "react-intl";
+import Meta from "../../components/Meta";
+import showShareInformationsModal from "../../components/share/showShareInformationsModal";
+import showShareLinkModal from "../../components/account/showShareLinkModal";
+import showFilePreviewModal from "../../components/share/modals/showFilePreviewModal";
+import { HoverTip } from "../../components/core/HoverTip";
+import CenterLoader from "../../components/core/CenterLoader";
+import useConfig from "../../hooks/config.hook";
+import useUser from "../../hooks/user.hook";
+import useTranslate from "../../hooks/useTranslate.hook";
+import shareService from "../../services/share.service";
+import { MyShare } from "../../types/share.type";
+import toast from "../../utils/toast.util";
+import { copyToClipboard } from "../../utils/clipboard.util";
+import { safeShareLinkBase } from "../../utils/safe-url.util";
+import isAdminOrAuditor from "../../utils/userRole.util";
+import { TbPlayerPlayFilled } from "react-icons/tb";
+
+const MyShares = () => {
+  const modals = useModals();
+  const config = useConfig();
+  const { user } = useUser();
+  const t = useTranslate();
+
+  const [shares, setShares] = useState<MyShare[]>();
+
+  useEffect(() => {
+    // R03: getMyShares() agora retorna Page<MyShare>. Consumimos .items
+    // (primeira página com perPage=100 preserva UX atual sem trocador).
+    shareService
+      .getMyShares({ page: 1, perPage: 100 })
+      .then((page) => setShares(page.items))
+      .catch(toast.axiosError);
+  }, []);
+
+  if (!shares) return <CenterLoader />;
+
+  return (
+    <>
+      <Meta title={t("account.shares.title")} />
+      <Title mb={30} order={3}>
+        <FormattedMessage id="account.shares.title" />
+      </Title>
+      {shares.length == 0 ? (
+        <Center style={{ height: "70vh" }}>
+          <Stack align="center" gap={10}>
+            <Title order={3}>
+              <FormattedMessage id="account.shares.title.empty" />
+            </Title>
+            <Text>
+              <FormattedMessage id="account.shares.description.empty" />
+            </Text>
+            <Space h={5} />
+            <Button component={Link} href="/upload" variant="light">
+              <FormattedMessage id="account.shares.button.create" />
+            </Button>
+          </Stack>
+        </Center>
+      ) : (
+        <Box style={{ display: "block", overflowX: "auto" }}>
+          <Table>
+            <thead>
+              <tr>
+                <th>
+                  <FormattedMessage id="account.shares.table.id" />
+                </th>
+                <th>
+                  <FormattedMessage id="account.shares.table.name" />
+                </th>
+                <th>
+                  <FormattedMessage id="account.shares.table.visitors" />
+                </th>
+                <th>
+                  <FormattedMessage id="account.shares.table.downloads" />
+                </th>
+                <th>
+                  <FormattedMessage id="account.shares.table.expiresAt" />
+                </th>
+                <th>
+                  <FormattedMessage id="account.shares.table.preview" />
+                </th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {shares.map((share) => {
+                const previewableFile = share.files?.find((file) =>
+                  shareService.doesFileSupportPreview(file.name),
+                );
+                return (
+                  <tr key={share.id}>
+                    <td>
+                      <Group gap="xs">
+                        {share.id}{" "}
+                        {share.security?.passwordProtected && (
+                          <TbLock
+                            color="orange"
+                            title={t("account.shares.table.password-protected")}
+                          />
+                        )}
+                      </Group>
+                    </td>
+                    <td>{share.name}</td>
+                    <td>
+                      {share.security?.maxViews ? (
+                        <FormattedMessage
+                          id="account.shares.table.visitor-count"
+                          values={{
+                            count: share.views,
+                            max: share.security.maxViews,
+                          }}
+                        />
+                      ) : (
+                        share.views
+                      )}
+                    </td>
+                    <td>
+                      {/* Contagem separada de downloads (não confunde com
+                          visualizações): cada operação tem seu próprio limite. */}
+                      {share.security?.maxDownloads ? (
+                        <FormattedMessage
+                          id="account.shares.table.download-count"
+                          values={{
+                            count: share.downloads ?? 0,
+                            max: share.security.maxDownloads,
+                          }}
+                        />
+                      ) : (
+                        (share.downloads ?? 0)
+                      )}
+                    </td>
+                    <td>
+                      {isEpochZero(share.expiration) ? (
+                        <FormattedMessage id="account.shares.table.expiry-never" />
+                      ) : (
+                        dayjs(share.expiration).format("LLL")
+                      )}
+                    </td>
+                    <td>
+                      <Group gap={4} wrap="nowrap">
+                        {previewableFile ? (
+                          <HoverTip label={t("account.shares.button.preview")}>
+                            <ActionIcon
+                              color="teal"
+                              variant="light"
+                              size={25}
+                              onClick={() =>
+                                showFilePreviewModal(share.id, previewableFile, modals)
+                              }
+                            >
+                              <TbPlayerPlayFilled />
+                            </ActionIcon>
+                          </HoverTip>
+                        ) : (
+                          <Text color="dimmed" size="xs">
+                            <FormattedMessage id="account.shares.table.no-preview" />
+                          </Text>
+                        )}
+                      </Group>
+                    </td>
+                    <td>
+                      <Group justify="flex-end" wrap="nowrap" gap={4}>
+                        <Link
+                          href={`/share/${share.id}/edit`}
+                          style={{ display: "inline-flex" }}
+                        >
+                          <HoverTip label={t("account.shares.button.edit")}>
+                            <ActionIcon color="orange" variant="light" size={25}>
+                              <TbPlusMinus />
+                            </ActionIcon>
+                          </HoverTip>
+                        </Link>
+                        <HoverTip label={t("common.button.info")}>
+                          <ActionIcon
+                            color="blue"
+                            variant="light"
+                            size={25}
+                            onClick={() => {
+                              showShareInformationsModal(
+                                modals,
+                                share,
+                                config.get("share.maxSize"),
+                                config.get("general.appUrl"),
+                                config.get("general.appUrl", true),
+                                isAdminOrAuditor(user)
+                                  ? { value: 0, unit: "days" }
+                                  : config.get("share.maxExpiration"),
+                                (updatedShare) =>
+                                  setShares(
+                                    shares.map((item) =>
+                                      item.id === updatedShare.id
+                                        ? updatedShare
+                                        : item,
+                                    ),
+                                  ),
+                              );
+                            }}
+                          >
+                            <TbInfoCircle />
+                          </ActionIcon>
+                        </HoverTip>
+                        <HoverTip label={t("common.button.copy-link")}>
+                          <ActionIcon
+                            color="victoria"
+                            variant="light"
+                            size={25}
+                            onClick={async () => {
+                              const link = `${safeShareLinkBase(config.get("general.appUrl") !== config.get("general.appUrl", true) ? config.get("general.appUrl") : undefined)}/share/${share.id}`;
+                              if (window.isSecureContext) {
+                                const ok = await copyToClipboard(link);
+                                if (ok) toast.success(t("common.notify.copied-link"));
+                                else toast.error(t("common.notify.copy-error"));
+                              } else {
+                                showShareLinkModal(
+                                  modals,
+                                  share.id,
+                                  config.get("general.appUrl"),
+                                  config.get("general.appUrl", true),
+                                );
+                              }
+                            }}
+                          >
+                            <TbLink />
+                          </ActionIcon>
+                        </HoverTip>
+                        <HoverTip label={t("common.button.delete")}>
+                          <ActionIcon
+                            color="red"
+                            variant="light"
+                            size={25}
+                            onClick={() => {
+                              modals.openConfirmModal({
+                                title: t("account.shares.modal.delete.title", {
+                                  share: share.id,
+                                }),
+                                children: (
+                                  <Text size="sm">
+                                    <FormattedMessage id="account.shares.modal.delete.description" />
+                                  </Text>
+                                ),
+                                confirmProps: {
+                                  color: "red",
+                                },
+                                labels: {
+                                  confirm: t("common.button.delete"),
+                                  cancel: t("common.button.cancel"),
+                                },
+                                onConfirm: () => {
+                                  shareService.expire(share.id);
+                                  setShares(
+                                    shares.filter((item) => item.id !== share.id),
+                                  );
+                                },
+                              });
+                            }}
+                          >
+                            <TbTrash />
+                          </ActionIcon>
+                        </HoverTip>
+                      </Group>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        </Box>
+      )}
+    </>
+  );
+};
+
+export default MyShares;

@@ -1,0 +1,31 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# GAP-06: load alerting rules from alerts.yml. The Alertmanager target list
+# stays empty until an alertmanager service is provisioned; rules still fire
+# and surface in the Prometheus UI.
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  # Caddy metrics were intentionally NOT scraped: the metrics endpoint lives on
+  # the admin API, and Caddyfile.prod sets `admin off` as an INFRA hardening
+  # measure (admin API can mutate config). Backend HTTP metrics cover the app.
+  - job_name: 'backend'
+    static_configs:
+      - targets: ['backend:8080']
+    # NestJS exposes Prometheus text metrics here (prom-client). The previous
+    # config scraped /api/health, which returns plain "OK"/"ERROR" — not a
+    # valid Prometheus exposition, so the target always failed to parse.
+    metrics_path: '/api/metrics'
+
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+alerting:
+  # Issue #24 (3.8.2): Alertmanager provisioned in docker-compose.monitoring.yml.
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']

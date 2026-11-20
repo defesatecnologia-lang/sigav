@@ -1,0 +1,699 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  ExecutionContext,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+  StreamableFile,
+} from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
+import contentDisposition from "content-disposition";
+import { Request, Response } from "express";
+import { DownloadLogService } from "../download-log/download-log.service";
+import { User } from "../../prisma/generated/prisma/client";
+import { Public } from "../auth/decorator/guards.decorator";
+import {
+  StrictShareOwnerAccess,
+  SharePublicAccess,
+} from "../share/decorator/share-guards.decorator";
+import { StreamViewCounterService } from "../share/domain/stream-view-counter.service";
+import { FileService } from "./file.service";
+import { UploadQueryDTO } from "./dto/uploadQuery.dto";
+import { DownloadLimitGuard } from "./guard/downloadLimit.guard";
+import mime from "mime-types";
+import range from "range-parser";
+import { HttpStatus } from "@nestjs/common";
+import { getRequestIp, getRequestUserAgent } from "../utils/request.util";
+import { GetUser } from "../auth/decorator/getUser.decorator";
+import { PrismaService } from "../prisma/prisma.service";
+import { ConfigService } from "../config/config.service";
+
+const VALID_ID_REGEX = /^[a-zA-Z0-9-]*={0,2}$/;
+
+interface AuthenticatedRequest extends Request {
+  user?: User;
+}
+
+/**
+ * AUD-ENRICH: contexto de auditoria extraído do request + banco para enriquecer
+ * os download logs (shareName, creatorUsername, authMethod, referer, mimeType,
+ * fileHash e recipientEmail).
+ */
+interface AuditContext {
+  shareName?: string | null;
+  creatorUsername?: string | null;
+  mimeType?: string | null;
+  authMethod?: string | null;
+  referer?: string | null;
+  fileHash?: string | null;
+  recipientEmail?: string | null;
+}
+
+async function buildAuditContext(
+  prisma: PrismaService,
+  shareId: string,
+  req: Request,
+  fileMime?: string | null,
+  opts?: { fileId?: string; recipientId?: string },
+): Promise<AuditContext> {
+  const [share, file, recipient] = await Promise.all([
+    prisma.share.findUnique({
+      where: { id: shareId },
+      select: { name: true, creator: { select: { username: true } } },
+    }),
+    opts?.fileId
+      ? prisma.file.findUnique({
+          where: { id: opts.fileId },
+          select: { sha256: true },
+        })
+      : Promise.resolve(null),
+    opts?.recipientId
+      ? prisma.shareRecipient.findUnique({
+          where: { id: opts.recipientId },
+          select: { email: true },
+        })
+      : Promise.resolve(null),
+  ]);
+
+  const shareToken = req.cookies?.[`share_${shareId}_token`] as
+    string | undefined;
+  const hasSession = Boolean((req as AuthenticatedRequest).user);
+
+  return {
+    shareName: share?.name ?? null,
+    creatorUsername: share?.creator?.username ?? null,
+    mimeType: fileMime ?? null,
+    authMethod: hasSession
+      ? "session"
+      : shareToken
+        ? "shareToken"
+        : "anonymous",
+    referer: req.headers.referer ?? null,
+    fileHash: file?.sha256 ?? null,
+    recipientEmail: recipient?.email ?? null,
+  };
+}
+
+/**
+ * AUD-ENRICH: registra um download log enriquecido, medindo a duração do
+ * request e anotando bytes transferidos, contexto de auth e HTTP status.
+ */
+function makeAuditEntry(
+  base: {
+    shareId: string;
+    fileId?: string;
+    fileName: string;
+    fileSize?: string | null;
+    fileHash?: string | null;
+    userId?: string;
+    username?: string;
+    ip: string;
+    userAgent?: string | null;
+    success: boolean;
+    reason?: string;
+    event?: "download" | "view" | "upload" | "delete";
+  },
+  context: AuditContext,
+  startedAt: number,
+  opts?: {
+    recipientId?: string;
+    recipientEmail?: string;
+    transferBytes?: string | number;
+    httpStatus?: number;
+  },
+): Parameters<DownloadLogService["record"]>[0] {
+  return {
+    ...base,
+    ...context,
+    recipientId: opts?.recipientId ?? null,
+    recipientEmail: opts?.recipientEmail ?? null,
+    transferBytes:
+      opts?.transferBytes != null ? String(opts.transferBytes) : null,
+    httpStatus: opts?.httpStatus ?? null,
+    durationMs: Math.max(0, Date.now() - startedAt),
+  };
+}
+
+function getValidRecipientId(recipientId?: string): string | undefined {
+  if (!recipientId) return undefined;
+  return VALID_ID_REGEX.test(recipientId) ? recipientId : undefined;
+}
+
+// SEC-XSS (VULN-06): tipos que embutem script/markup ativo (SVG/HTML/XML)
+// nunca são servidos inline — navegação direta força download. Previews do
+// frontend via <img>/<video> continuam funcionando: disposition não afeta
+// tags de mídia (e scripts em SVG não executam dentro de <img>).
+const ACTIVE_INLINE_TYPES = new Set([
+  "image/svg+xml",
+  "text/html",
+  "application/xhtml+xml",
+  "text/xml",
+  "application/xml",
+]);
+
+function inlineDispositionAllowed(fileName: string): boolean {
+  return !ACTIVE_INLINE_TYPES.has(mime.lookup(fileName) || "");
+}
+
+@Controller("shares/:shareId/files")
+export class FileController {
+  constructor(
+    private fileService: FileService,
+    private downloadLimitGuard: DownloadLimitGuard,
+    private downloadLogService: DownloadLogService,
+    private streamViewCounter: StreamViewCounterService,
+    private prisma: PrismaService,
+    private configService: ConfigService,
+  ) {}
+
+  /**
+   * Acesso privilegiado ao conteúdo do share: criador ou admin com a
+   * permissão `share.allowAdminAccessAllShares`. Esses acessos não consomem
+   * nem são bloqueados pelos limites de views.
+   */
+  private async isPrivilegedAccess(
+    shareId: string,
+    user?: User | null,
+  ): Promise<boolean> {
+    if (!user) return false;
+    if (
+      user.isAdmin &&
+      this.configService.getBoolean("share.allowAdminAccessAllShares")
+    )
+      return true;
+    const share = await this.prisma.share.findUnique({
+      where: { id: shareId },
+      select: { creatorId: true },
+    });
+    return !!share && share.creatorId === user.id;
+  }
+
+  @Post()
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @StrictShareOwnerAccess()
+  async create(
+    // SEC-ZIPSLIP (VULN-15): query params agora passam pelo ValidationPipe
+    // (antes eram interface TS pura, sem nenhuma validação).
+    @Query() query: UploadQueryDTO,
+    @Body() body: string,
+    @Param("shareId") shareId: string,
+    @Req() req: Request,
+    @GetUser() user: User,
+  ) {
+    const { id, name, chunkIndex, totalChunks, description } = query;
+
+    const result = await this.fileService.create(
+      body,
+      { index: chunkIndex, total: totalChunks },
+      { id, name, description },
+      shareId,
+    );
+
+    if (chunkIndex === totalChunks - 1) {
+      const startedAt = Date.now();
+      let fileSize: string | null = null;
+      let mimeType: string | null = null;
+      try {
+        const meta = await this.fileService.getFileMetaData(
+          shareId,
+          result.id,
+        );
+        fileSize = meta?.size != null ? meta.size.toString() : null;
+        mimeType = mime.lookup(name) || null;
+      } catch {
+        fileSize = null;
+      }
+      const context = await buildAuditContext(
+        this.prisma,
+        shareId,
+        req,
+        mimeType,
+        {
+          fileId: id,
+        },
+      );
+      void this.downloadLogService.record(
+        makeAuditEntry(
+          {
+            shareId,
+            fileId: result.id,
+            fileName: name,
+            fileSize,
+            userId: user?.id,
+            username: user?.username,
+            ip: getRequestIp(req),
+            userAgent: getRequestUserAgent(req),
+            success: true,
+            event: "upload",
+          },
+          context,
+          startedAt,
+        ),
+      );
+    }
+
+    return result;
+  }
+
+  @Get("zip")
+  @Public()
+  @SharePublicAccess()
+  async getZip(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Param("shareId") shareId: string,
+    @Query("recipient") recipientId?: string,
+  ) {
+    await this.downloadLimitGuard.canActivate({
+      switchToHttp: () => ({
+        getRequest: () => req,
+      }),
+    } as unknown as ExecutionContext);
+
+    const zipStream = await this.fileService.getZip(shareId);
+
+    res.set({
+      "Content-Type": "application/zip",
+      "Content-Disposition": contentDisposition(`${shareId}.zip`),
+    });
+
+    const user = (req as AuthenticatedRequest).user;
+    const startedAt = Date.now();
+    const context = await buildAuditContext(
+      this.prisma,
+      shareId,
+      req,
+      "application/zip",
+      { recipientId: getValidRecipientId(recipientId) },
+    );
+    void this.downloadLogService.record(
+      makeAuditEntry(
+        {
+          shareId,
+          fileName: `${shareId}.zip`,
+          fileSize: null,
+          userId: user?.id,
+          username: user?.username,
+          ip: getRequestIp(req),
+          userAgent: getRequestUserAgent(req),
+          success: true,
+          event: "download",
+        },
+        context,
+        startedAt,
+        { httpStatus: HttpStatus.OK },
+      ),
+    );
+    void this.fileService.notifyRecipientDownload(
+      shareId,
+      `${shareId}.zip`,
+      getValidRecipientId(recipientId),
+    );
+
+    return new StreamableFile(zipStream);
+  }
+
+  @Get("certificates-zip")
+  @Public()
+  @SharePublicAccess()
+  async getCertificatesZip(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Param("shareId") shareId: string,
+  ) {
+    const zipStream = await this.fileService.getCertificatesZip(shareId);
+
+    res.set({
+      "Content-Type": "application/zip",
+      "Content-Security-Policy": "sandbox",
+      "Cache-Control": "no-store",
+      "Content-Disposition": contentDisposition(`${shareId}.certificados.zip`),
+    });
+
+    const user = (req as AuthenticatedRequest).user;
+    const startedAt = Date.now();
+    const context = await buildAuditContext(
+      this.prisma,
+      shareId,
+      req,
+      "application/zip",
+      {},
+    );
+    void this.downloadLogService.record(
+      makeAuditEntry(
+        {
+          shareId,
+          fileName: `${shareId}.certificados.zip`,
+          fileSize: null,
+          userId: user?.id,
+          username: user?.username,
+          ip: getRequestIp(req),
+          userAgent: getRequestUserAgent(req),
+          success: true,
+          event: "download",
+        },
+        context,
+        startedAt,
+        { httpStatus: HttpStatus.OK },
+      ),
+    );
+
+    return new StreamableFile(zipStream);
+  }
+
+  @Get(":fileId/certificate")
+  @Public()
+  @SharePublicAccess()
+  async getCertificate(
+    @Res({ passthrough: true }) res: Response,
+    @Param("shareId") shareId: string,
+    @Param("fileId") fileId: string,
+  ) {
+    const { metaData, file } = await this.fileService.getCertificate(
+      shareId,
+      fileId,
+    );
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Length": metaData.size,
+      // SEC-XSS (VULN-06): "allow-scripts allow-same-origin" anula o sandbox;
+      // PDF estático gerado pelo servidor não precisa deles.
+      "Content-Security-Policy": "sandbox",
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": "no-store",
+      "Content-Disposition": contentDisposition(metaData.name, { type: "inline" }),
+    });
+
+    return new StreamableFile(file);
+  }
+
+  @Get(":fileId")
+  @Public()
+  @SharePublicAccess()
+  async getFile(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Param("shareId") shareId: string,
+    @Param("fileId") fileId: string,
+    @Query("download") download = "true",
+    @Query("recipient") recipientId?: string,
+  ) {
+    const isDownload = download === "true";
+
+    const fileMetaData = await this.fileService.getFileMetaData(
+      shareId,
+      fileId,
+    );
+    const isCertificate = fileMetaData.name.endsWith(".certificado.pdf");
+    const isSignedVideo = /\.assinado\.\w+$/.test(fileMetaData.name);
+
+    // SEC-V1/V2: visualização de VISITANTE (via link) é contada no servidor,
+    // na entrega da stream (download=false): cada request SEM header Range
+    // (probe/abertura do player) consome uma view; chunks/seeks com Range
+    // apenas continuam a sessão. Criador/admin autenticado têm visualização
+    // ILIMITADA no sistema e não são contados. Certificado permanece isento.
+    if (!isDownload && !isCertificate) {
+      const sessionUser = (req as AuthenticatedRequest).user;
+      const privileged = await this.isPrivilegedAccess(shareId, sessionUser);
+      if (!privileged) {
+        const shareToken = req.cookies?.[`share_${shareId}_token`] as
+          | string
+          | undefined;
+        await this.streamViewCounter.countStreamView(
+          shareId,
+          {
+            identityKey: this.streamViewCounter.identityFromRequest(req),
+            ip: getRequestIp(req),
+            userAgent: getRequestUserAgent(req),
+            authMethod: sessionUser
+              ? "session"
+              : shareToken
+                ? "shareToken"
+                : "anonymous",
+            referer: req.headers.referer ?? null,
+          },
+          { isRangeRequest: !!req.headers.range },
+        );
+      }
+    }
+
+    if (isDownload && !isCertificate) {
+      await this.downloadLimitGuard.canActivate({
+        switchToHttp: () => ({
+          getRequest: () => req,
+        }),
+      } as unknown as ExecutionContext);
+    }
+
+    const file = await this.fileService.get(shareId, fileId);
+
+    const hasFolderPath = file.metaData.name.includes("/");
+
+    // Vídeos originais: baixa junto o certificado PDF (autenticidade).
+    const isOriginalVideo = !isCertificate && !isSignedVideo && !hasFolderPath;
+    const hasCert = await this.fileService.hasCertificate(shareId, fileId);
+    if (isDownload && isOriginalVideo && hasCert) {
+      const zipStream = await this.fileService.getVideoWithCertificateZip(
+        shareId,
+        fileId,
+      );
+      res.set({
+        "Content-Type": "application/zip",
+        "Content-Security-Policy": "sandbox",
+        "Cache-Control": "no-store",
+        "Content-Disposition": contentDisposition(`${fileMetaData.name}.zip`),
+      });
+
+      const user = (req as AuthenticatedRequest).user;
+      const startedAt = Date.now();
+      const context = await buildAuditContext(
+        this.prisma,
+        shareId,
+        req,
+        "application/zip",
+        { fileId, recipientId: getValidRecipientId(recipientId) },
+      );
+      void this.downloadLogService.record(
+        makeAuditEntry(
+          {
+            shareId,
+            fileId,
+            fileName: file.metaData.name,
+            fileSize: file.metaData.size,
+            userId: user?.id,
+            username: user?.username,
+            ip: getRequestIp(req),
+            userAgent: getRequestUserAgent(req),
+            success: true,
+            event: "download",
+          },
+          context,
+          startedAt,
+          { httpStatus: HttpStatus.OK },
+        ),
+      );
+      void this.fileService.notifyRecipientDownload(
+        shareId,
+        file.metaData.name,
+        getValidRecipientId(recipientId),
+      );
+
+      return new StreamableFile(zipStream);
+    }
+
+    if (isDownload && hasFolderPath) {
+      const zipStream = await this.fileService.getFileZip(shareId, fileId);
+      const zipBaseName =
+        file.metaData.name.split("/").pop() || file.metaData.name;
+      res.set({
+        "Content-Type": "application/zip",
+        "Content-Security-Policy": "sandbox",
+        "Cache-Control": "no-store",
+        "Content-Disposition": contentDisposition(`${zipBaseName}.zip`),
+      });
+
+      const user = (req as AuthenticatedRequest).user;
+      const startedAt = Date.now();
+      const context = await buildAuditContext(
+        this.prisma,
+        shareId,
+        req,
+        "application/zip",
+        { fileId, recipientId: getValidRecipientId(recipientId) },
+      );
+      void this.downloadLogService.record(
+        makeAuditEntry(
+          {
+            shareId,
+            fileId,
+            fileName: file.metaData.name,
+            fileSize: file.metaData.size,
+            userId: user?.id,
+            username: user?.username,
+            ip: getRequestIp(req),
+            userAgent: getRequestUserAgent(req),
+            success: true,
+            event: "download",
+          },
+          context,
+          startedAt,
+          { httpStatus: HttpStatus.OK },
+        ),
+      );
+      void this.fileService.notifyRecipientDownload(
+        shareId,
+        file.metaData.name,
+        getValidRecipientId(recipientId),
+      );
+
+      return new StreamableFile(zipStream);
+    }
+
+    const rangeHeader = isDownload
+      ? undefined
+      : (req.headers.range as string | undefined);
+
+    if (rangeHeader) {
+      const meta = await this.fileService.getFileMetaData(shareId, fileId);
+      const fullSize = Number(meta.size);
+
+      const ranges = range(fullSize, rangeHeader, { combine: true });
+      if (ranges === -1) {
+        res.set({ "Content-Range": `bytes */${fullSize}` });
+        return res.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE).end();
+      }
+      if (ranges !== -2 && ranges.length > 0) {
+        const { start, end } = ranges[0];
+        const rangedFile = await this.fileService.get(shareId, fileId, {
+          start,
+          end,
+        });
+        res.status(HttpStatus.PARTIAL_CONTENT);
+        res.set({
+          "Content-Type":
+            mime?.lookup?.(meta.name) || "application/octet-stream",
+          "Content-Length": String(end - start + 1),
+          "Content-Range": `bytes ${start}-${end}/${fullSize}`,
+          "Accept-Ranges": "bytes",
+          "Content-Security-Policy": "sandbox",
+          "X-Content-Type-Options": "nosniff",
+          "Cache-Control": "no-store",
+          "Content-Disposition": contentDisposition(meta.name, {
+            type: inlineDispositionAllowed(meta.name) ? "inline" : "attachment",
+          }),
+        });
+        return new StreamableFile(rangedFile.file);
+      }
+    }
+
+    const headers = {
+      "Content-Type":
+        mime?.lookup?.(file.metaData.name) || "application/octet-stream",
+      "Content-Length": file.metaData.size,
+      "Accept-Ranges": "bytes",
+      "Content-Security-Policy": "sandbox",
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": "no-store",
+      "Content-Disposition": contentDisposition(
+        file.metaData.name,
+        isDownload || !inlineDispositionAllowed(file.metaData.name)
+          ? undefined
+          : { type: "inline" },
+      ),
+    };
+
+    res.set(headers);
+
+    if (isDownload) {
+      const user = (req as AuthenticatedRequest).user;
+      const startedAt = Date.now();
+      const fileMime = mime.lookup(file.metaData.name) || null;
+      const context = await buildAuditContext(
+        this.prisma,
+        shareId,
+        req,
+        fileMime,
+        { fileId, recipientId: getValidRecipientId(recipientId) },
+      );
+      void this.downloadLogService.record(
+        makeAuditEntry(
+          {
+            shareId,
+            fileId,
+            fileName: file.metaData.name,
+            fileSize: file.metaData.size,
+            userId: user?.id,
+            username: user?.username,
+            ip: getRequestIp(req),
+            userAgent: getRequestUserAgent(req),
+            success: true,
+            event: "download",
+          },
+          context,
+          startedAt,
+          { httpStatus: HttpStatus.OK },
+        ),
+      );
+      void this.fileService.notifyRecipientDownload(
+        shareId,
+        file.metaData.name,
+        getValidRecipientId(recipientId),
+      );
+    }
+
+    return new StreamableFile(file.file);
+  }
+
+  @Delete(":fileId")
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @StrictShareOwnerAccess()
+  async remove(
+    @Param("fileId") fileId: string,
+    @Param("shareId") shareId: string,
+    @Req() req: Request,
+    @GetUser() user: User,
+  ) {
+    let fileName: string | null = null;
+    let fileSize: string | null = null;
+    try {
+      const meta = await this.fileService.getFileMetaData(shareId, fileId);
+      fileName = meta?.name ?? null;
+      fileSize = meta?.size != null ? meta.size.toString() : null;
+    } catch {
+      fileName = null;
+      fileSize = null;
+    }
+
+    await this.fileService.remove(shareId, fileId);
+
+    const startedAt = Date.now();
+    const context = await buildAuditContext(this.prisma, shareId, req, null, {
+      fileId,
+    });
+    void this.downloadLogService.record(
+      makeAuditEntry(
+        {
+          shareId,
+          fileId,
+          fileName: fileName ?? fileId,
+          fileSize,
+          userId: user?.id,
+          username: user?.username,
+          ip: getRequestIp(req),
+          userAgent: getRequestUserAgent(req),
+          success: true,
+          event: "delete",
+        },
+        context,
+        startedAt,
+        { httpStatus: HttpStatus.OK },
+      ),
+    );
+  }
+}

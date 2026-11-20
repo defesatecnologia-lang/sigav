@@ -1,0 +1,74 @@
+import { Expose, plainToClass, Transform } from "class-transformer";
+import {
+  IsEmail,
+  IsIn,
+  IsOptional,
+  Length,
+  Matches,
+  MinLength,
+} from "class-validator";
+import { i18nValidationMessage } from "nestjs-i18n";
+
+export class UserDTO {
+  @Expose()
+  id!: string;
+
+  @Expose()
+  @Matches("^[a-zA-Z0-9_.]*$", undefined, {
+    message: i18nValidationMessage("validation.usernamePattern"),
+  })
+  @Length(3, 32)
+  username!: string;
+
+  @Expose()
+  @IsEmail()
+  email!: string;
+
+  @Expose()
+  hasPassword!: boolean;
+
+  // VULN-14: além do comprimento mínimo, exige ao menos uma letra e um
+  // dígito — bloqueia senhas puramente alfabéticas/numéricas triviais.
+  @MinLength(8)
+  @Matches(/^(?=.*[A-Za-z])(?=.*\d)/, {
+    message: i18nValidationMessage("validation.passwordPolicy"),
+  })
+  password!: string;
+
+  @Expose()
+  isAdmin!: boolean;
+
+  @Expose()
+  @IsIn(["admin", "operador", "auditor"])
+  role!: string;
+
+  @Expose()
+  isActivated!: boolean;
+
+  @Expose()
+  @IsOptional()
+  @Matches(/^[0-9]+$/, {
+    message: "shareSizeLimit must contain only digits",
+  })
+  @Transform(({ value }) =>
+    value === null || value === undefined ? undefined : value.toString(),
+  )
+  shareSizeLimit?: string;
+
+  @Expose()
+  totpVerified!: boolean;
+
+  @Expose()
+  passwordMustChange?: boolean;
+
+  from(partial: Partial<UserDTO>) {
+    const result = plainToClass(UserDTO, partial, {
+      excludeExtraneousValues: true,
+    });
+    return result;
+  }
+
+  fromList(partial: Partial<UserDTO>[]) {
+    return partial.map((part) => this.from(part));
+  }
+}

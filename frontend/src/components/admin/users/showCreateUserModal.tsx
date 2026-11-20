@@ -1,0 +1,231 @@
+import {
+  Button,
+  Group,
+  Loader,
+  PasswordInput,
+  Select,
+  Stack,
+  Switch,
+  TextInput,
+} from "@mantine/core";
+import { useForm } from "@mantine/form";
+import { useModals } from "@mantine/modals";
+import { useEffect, useState } from "react";
+import { FormattedMessage } from "react-intl";
+import * as yup from "yup";
+import { translateOutsideContext } from "../../../hooks/useTranslate.hook";
+import useTranslate from "../../../hooks/useTranslate.hook";
+import userService from "../../../services/user.service";
+import User from "../../../types/user.type";
+import { getApiErrorField, getApiErrorMessage } from "../../../utils/error.util";
+import {
+  isReauthRequiredError,
+  withReauth,
+} from "../../../utils/reauth.util";
+import toast from "../../../utils/toast.util";
+import showTemporaryPasswordModal from "./showTemporaryPasswordModal";
+
+type ModalsContextProps = ReturnType<typeof useModals>;
+
+const showCreateUserModal = (
+  modals: ModalsContextProps,
+  smtpEnabled: boolean,
+  getUsers: () => void,
+  currentUser?: User | null,
+) => {
+  const t = translateOutsideContext();
+  return modals.openModal({
+    title: t("admin.users.modal.create.title"),
+    children: (
+      <Body
+        modals={modals}
+        smtpEnabled={smtpEnabled}
+        getUsers={getUsers}
+        currentUser={currentUser}
+      />
+    ),
+  });
+};
+
+const Body = ({
+  modals,
+  smtpEnabled,
+  getUsers,
+  currentUser,
+}: {
+  modals: ModalsContextProps;
+  smtpEnabled: boolean;
+  getUsers: () => void;
+  currentUser?: User | null;
+}) => {
+  const t = useTranslate();
+  const [checkingField, setCheckingField] = useState<"username" | "email" | null>(null);
+  const form = useForm({
+    initialValues: {
+      username: "",
+      email: "",
+      password: undefined,
+      role: "operador",
+      setPasswordManually: false,
+      generatePassword: smtpEnabled,
+    },
+    validate: (values) => {
+      const schema = yup.object().shape({
+        email: yup.string().email(t("common.error.invalid-email")),
+        username: yup
+          .string()
+          .min(3, t("common.error.too-short", { length: 3 })),
+        password: yup
+          .string()
+          .min(8, t("common.error.too-short", { length: 8 }))
+          .optional(),
+      });
+      try {
+        schema.validateSync(values, { abortEarly: false });
+        return {};
+      } catch (err: any) {
+        const errors: Record<string, string> = {};
+        err.inner?.forEach((e: any) => {
+          if (e.path) errors[e.path] = e.message;
+        });
+        return errors;
+      }
+    },
+  });
+
+  useEffect(() => {
+    if (!form.values.username || form.values.username.length < 3) return;
+    const timer = setTimeout(async () => {
+      setCheckingField("username");
+      try {
+        const result = await userService.checkAvailability({ username: form.values.username });
+        if (!result.available && result.field === "username") {
+          form.setFieldError("username", t("admin.users.error.duplicated-username"));
+        } else if (form.errors.username === t("admin.users.error.duplicated-username")) {
+          form.clearFieldError("username");
+        }
+      } catch {
+        // ignore network errors during debounce
+      }
+      setCheckingField(null);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [form.values.username]);
+
+  useEffect(() => {
+    if (!form.values.email || !form.values.email.includes("@")) return;
+    const timer = setTimeout(async () => {
+      setCheckingField("email");
+      try {
+        const result = await userService.checkAvailability({ email: form.values.email });
+        if (!result.available && result.field === "email") {
+          form.setFieldError("email", t("admin.users.error.duplicated-email"));
+        } else if (form.errors.email === t("admin.users.error.duplicated-email")) {
+          form.clearFieldError("email");
+        }
+      } catch {
+        // ignore network errors during debounce
+      }
+      setCheckingField(null);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [form.values.email]);
+
+  return (
+    <Stack>
+      <form
+        onSubmit={form.onSubmit(async (values) => {
+          const doCreate = () =>
+            userService
+              .create({
+                username: values.username,
+                email: values.email,
+                password: values.password,
+                role: values.role,
+                generatePassword: values.generatePassword,
+              })
+              .then((result) => {
+                getUsers();
+                if (result.temporaryPassword) {
+                  showTemporaryPasswordModal(modals, result.temporaryPassword);
+                } else {
+                  modals.closeAll();
+                }
+              });
+
+          // SEC-1.2/15.4: criar usuário é operação crítica — exige reauth.
+          const reauth = withReauth(modals, !!currentUser?.totpVerified);
+          doCreate().catch((e) => {
+            if (isReauthRequiredError(e)) {
+              reauth(doCreate)(e);
+              return;
+            }
+            const field = getApiErrorField(e);
+            if (field === "username" || field === "email") {
+              form.setFieldError(field, getApiErrorMessage(e) ?? t("admin.users.error.duplicated"));
+            } else {
+              toast.axiosError(e);
+            }
+          });
+        })}
+      >
+        <Stack>
+          <TextInput
+            label={t("admin.users.modal.create.username")}
+            rightSection={checkingField === "username" ? <Loader size="xs" /> : undefined}
+            {...form.getInputProps("username")}
+          />
+          <TextInput
+            label={t("admin.users.modal.create.email")}
+            rightSection={checkingField === "email" ? <Loader size="xs" /> : undefined}
+            {...form.getInputProps("email")}
+          />
+          <Select
+            label={t("admin.users.modal.create.role")}
+            description={t("admin.users.modal.create.role.description")}
+            placeholder={t("admin.users.modal.create.role.placeholder")}
+            data={[
+              { value: "admin", label: t("roles.admin") },
+              { value: "operador", label: t("roles.operador") },
+              { value: "auditor", label: t("roles.auditor") },
+            ]}
+            {...form.getInputProps("role")}
+          />
+          {smtpEnabled && (
+            <Switch
+              mt="xs"
+              labelPosition="left"
+              label={t("admin.users.modal.create.manual-password")}
+              description={t(
+                "admin.users.modal.create.manual-password.description",
+              )}
+              {...form.getInputProps("setPasswordManually", {
+                type: "checkbox",
+              })}
+            />
+          )}
+          <Switch
+            mt="xs"
+            labelPosition="left"
+            label={t("admin.users.modal.create.generatePassword")}
+            description={t("admin.users.modal.create.generatePassword.description")}
+            {...form.getInputProps("generatePassword", { type: "checkbox" })}
+          />
+          {!form.values.generatePassword && (
+            <PasswordInput
+              label={t("admin.users.modal.create.password")}
+              {...form.getInputProps("password")}
+            />
+          )}
+          <Group justify="flex-end">
+            <Button type="submit">
+              <FormattedMessage id="common.button.create" />
+            </Button>
+          </Group>
+        </Stack>
+      </form>
+    </Stack>
+  );
+};
+
+export default showCreateUserModal;

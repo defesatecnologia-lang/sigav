@@ -1,0 +1,104 @@
+# dependencies
+node_modules
+.pnp
+.pnp.js
+
+# next.js
+/frontend/.next/
+/frontend/out/
+
+# yarn
+yarn.lock
+
+# build
+build/
+dist/
+/backend/coverage/
+
+# misc
+.DS_Store
+*.pem
+*:Zone.Identifier
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env file
+.env
+.env.local
+.env.production
+.env.*.local
+!.env.example
+!.env.local.example
+!/backend/prisma/.env
+
+# GOP-06 provisioning secrets — host-side bind-mounted files for Docker
+# compose (grafana, future). Never commit.
+/scripts/secrets/
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+
+# PWA
+/frontend/public/workbox-*
+/frontend/public/sw.*
+
+# project specific
+# /backend/data/ guarda apenas artefatos de E2E/teste (e2e-test, e2e-pw)
+/backend/data/
+/backend/prisma/generated/
+/backend/src/generated/
+/data/*
+!/data/.gitkeep
+# local dev database (SQLite)
+/backend/prisma/dev.db
+/backend/prisma/dev.db-journal
+/backend/dev.db
+/docs/build/
+/docs/.docusaurus
+/docs/.cache-loader
+/config.yaml
+
+# Jetbrains specific (webstorm)
+.idea/**/**
+
+# IDE specific
+.claude
+.vscode
+
+# Temp folder for generative work
+/temp/**
+
+# Logs
+*.log
+backend/server.log
+
+# opencode config (dev tool)
+.opencode/
+opencode.json
+
+
+
+# Mas COMMITAR subagentes e skills:
+!.config/opencode/subagents/
+!.config/opencode/skills/
+secrets/
+
+# Playwright MCP artifacts (temp)
+.playwright-mcp/
+.manual.md
+
+# Playwright E2E artifacts (traces, videos, screenshots, report)
+/e2e/test-results/
+/e2e/playwright-report/
+
+# artefatos locais de validação
+validation-output.txt
+staging-validation.log
+gitleaks-report.json

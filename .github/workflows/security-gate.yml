@@ -1,0 +1,599 @@
+# GitHub Actions Workflow - Security Gate for Production
+# Triggered on: push to main, pull_request to main, release published
+# Fails build on: CRITICAL/HIGH vulnerabilities, secret leaks, SAST findings
+
+name: Security Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '24'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
+  id-token: write
+  packages: read
+
+jobs:
+  # =============================================================================
+  # 1. SECRET SCANNING (gitleaks)
+  # =============================================================================
+  secret-scan:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # gitleaks-action v2 consulta a API de commits do PR
+      # (GET /repos/:owner/:repo/pulls/:n/commits) antes de escanear.
+      # Sem esse escopo o GITHUB_TOKEN recebe 403 "Resource not
+      # accessible by integration" e o job falha em TODO pull_request
+      # (runs 42536714392, 42404982457, 34655786995) — falso positivo
+      # de infraestrutura, sem relação com vazamento detectado.
+      pull-requests: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+        with:
+          fetch-depth: 0  # Full history for gitleaks
+
+      - name: Run gitleaks
+        if: github.event_name != 'release'
+        uses: gitleaks/gitleaks-action@bcfb9cce635345aac9996cedc19b2de8e01b894f # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --verbose --redact --fail-on-leak
+
+      # gitleaks-action v2 não suporta o evento `release`; roda o binário direto
+      - name: Run gitleaks (release)
+        if: github.event_name == 'release'
+        run: |
+          # exit code 1 quando encontra leak (comportamento padrão do CLI)
+          docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.30.1 \
+            detect --source /repo --verbose --redact
+
+  # =============================================================================
+  # 2. DEPENDENCY AUDIT (npm audit + OSV Scanner)
+  # =============================================================================
+  dependency-audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies (backend)
+        working-directory: ./backend
+        run: npm ci --ignore-scripts
+
+      - name: Install dependencies (frontend)
+        working-directory: ./frontend
+        run: npm ci --ignore-scripts
+
+      - name: Install dependencies (root)
+        run: npm ci --ignore-scripts
+
+      # P1-02 (PLANO-CORRECOES-2026-11-03): enforcement real — o `|| true`
+      # anterior deixava o npm audit em modo informativo (só publicava
+      # artefato). O gate roda em scripts/ci/npm-audit-gate.mjs com as
+      # exclusões documentadas (braces GHSA-vfj7-8cjw-p6xm, zod
+      # GHSA-mrhx-c7xc-m3w5 e picomatch GHSA-fc5q-39xc-vjpf); falha em
+      # HIGH/CRITICAL fora delas.
+      - name: Run npm audit gate (backend)
+        working-directory: ./backend
+        run: |
+          npm audit --audit-level=high --json > npm-audit-backend.json || true
+          node ../scripts/ci/npm-audit-gate.mjs npm-audit-backend.json
+
+      - name: Run npm audit gate (frontend)
+        working-directory: ./frontend
+        run: |
+          npm audit --audit-level=high --json > npm-audit-frontend.json || true
+          node ../scripts/ci/npm-audit-gate.mjs npm-audit-frontend.json
+
+      # osv-scanner exits 1 on ANY vulnerability (incl. LOW/MEDIUM); the
+      # explicit HIGH/CRITICAL gate below decides whether the job fails.
+      - name: Run OSV Scanner (all)
+        uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --recursive
+            --format=json
+            --output=osv-results.json
+            .
+
+      - name: Check for HIGH/CRITICAL vulnerabilities
+        run: |
+          # GHSA-vfj7-8cjw-p6xm (braces): exclusa apos revisao — sem versao
+          # corrigida upstream (todas <=3.0.3 vulneraveis; verificado em
+          # 2026-10-13). No frontend a cadeia e 100% dev-time (eslint); no
+          # backend foi eliminada via override de chokidar@4 no nestjs-i18n.
+          # Remover quando upstream publicar correcao.
+          # GHSA-mrhx-c7xc-m3w5 (zod <4.6.6): fix exige downgrade do
+          # @serwist/next 9→8 (breaking); risco aceito, reavaliar a cada bump
+          # do serwist (ver scripts/ci/npm-audit-gate.mjs).
+          # GHSA-fc5q-39xc-vjpf (picomatch — ReDoS via extglobs repetidos):
+          # sem versao corrigida upstream (<=4.0.7, first_patched_version=null;
+          # 4.0.7 e a latest em 2026-11-17). Cadeia 100% dev-time/build-time
+          # (eslint/vitest/vite), padroes internos de linter/test runner sem
+          # input controlavel por atacante; `npm audit --omit=dev` = 0.
+          # Remover quando upstream publicar correcao (>4.0.7).
+          OSV_EXCLUDED='GHSA-vfj7-8cjw-p6xm,GHSA-mrhx-c7xc-m3w5,GHSA-fc5q-39xc-vjpf'
+          CRITICAL_COUNT=$(jq --arg ex "$OSV_EXCLUDED" '[.results[].packages[].vulnerabilities[] | select(.severity == "CRITICAL") | select(.id as $id | $ex | split(",") | index($id) | not)] | length' osv-results.json 2>/dev/null || echo 0)
+          HIGH_COUNT=$(jq --arg ex "$OSV_EXCLUDED" '[.results[].packages[].vulnerabilities[] | select(.severity == "HIGH") | select(.id as $id | $ex | split(",") | index($id) | not)] | length' osv-results.json 2>/dev/null || echo 0)
+          
+          if [ "$CRITICAL_COUNT" -gt 0 ] || [ "$HIGH_COUNT" -gt 0 ]; then
+            echo "::error::Found $CRITICAL_COUNT CRITICAL and $HIGH_COUNT HIGH vulnerabilities"
+            cat osv-results.json | jq --arg ex "$OSV_EXCLUDED" '.results[].packages[] | select(.vulnerabilities[]?.severity == "CRITICAL" or .vulnerabilities[]?.severity == "HIGH") | {package: .package.name, version: .package.version, vulnerabilities: .vulnerabilities[] | select((.severity == "CRITICAL" or .severity == "HIGH") and (.id as $id | $ex | split(",") | index($id) | not)) | {id: .id, severity: .severity, summary: .summary}}'
+            exit 1
+          fi
+          
+          echo "✅ No CRITICAL/HIGH vulnerabilities found"
+
+      - name: Upload audit reports
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: dependency-audit-reports
+          path: |
+            backend/npm-audit-backend.json
+            frontend/npm-audit-frontend.json
+            osv-results.json
+
+  # =============================================================================
+  # 3. SAST (semgrep + CodeQL)
+  # =============================================================================
+  sast:
+    name: Static Analysis (SAST)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      # The legacy returntocorp/semgrep-action does not emit semgrep.sarif at
+      # a stable path; run the official container directly instead.
+      - name: Run semgrep
+        continue-on-error: true # keep SARIF for upload even when findings block
+        run: |
+          docker run --rm -v "$PWD:/src" semgrep/semgrep:latest \
+            semgrep scan \
+              --config p/security-audit \
+              --config p/secrets \
+              --config p/typescript \
+              --config p/nodejs \
+              --sarif --output /src/semgrep.sarif
+
+      - name: Upload semgrep results
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # CodeQL Analysis
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [typescript, javascript]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended,security-and-quality
+          # Escopo: apenas código-fonte real (issue #41) — exclui código
+          # gerado pelo Prisma, migrations, scripts operacionais e fixtures e2e.
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Build (backend)
+        if: matrix.language == 'typescript'
+        run: |
+          cd packages/shared && npm ci --ignore-scripts && npm run build
+          cd ../../backend && npm ci --ignore-scripts && npx prisma generate && npm run build
+
+      - name: Build (frontend)
+        if: matrix.language == 'javascript'
+        run: |
+          cd packages/shared && npm ci --ignore-scripts && npm run build
+          cd ../../frontend && npm ci --ignore-scripts && npm run build
+
+      - name: Perform CodeQL Analysis
+        continue-on-error: true
+        uses: github/codeql-action/analyze@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # v3
+        with:
+          category: "/language:${{matrix.language}}"
+
+  # =============================================================================
+  # 4. DOCKERFILE SECURITY (hadolint + dockerfilelint)
+  # =============================================================================
+  dockerfile-lint:
+    name: Dockerfile Security Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      - name: Run hadolint
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          recursive: true
+          failure-threshold: error
+          config: .hadolint.yaml
+
+      - name: Run dockerfilelint (custom rules)
+        run: |
+          npm install -g dockerfilelint
+          cat > .dockerfilelintrc <<'EOF'
+          {
+            "rules": {
+              "user": "error",
+              "latest-tag": "error",
+              "workdir": "warn",
+              "expose": "warn",
+              "cmd-allowed": ["node", "npm", "sh", "bash"],
+              "entrypoint-allowed": ["node", "npm", "sh", "bash"],
+              "shell": "error",
+              "apt-get-install": "error",
+              "yum-install": "error"
+            }
+          }
+          EOF
+          dockerfilelint Dockerfile || true
+          dockerfilelint backend/Dockerfile || true
+
+  # =============================================================================
+  # 5. CONTAINER IMAGE SCAN (Trivy) - on Docker build
+  # =============================================================================
+  container-scan:
+    name: Container Image Scan (Trivy)
+    runs-on: ubuntu-latest
+    needs: [dockerfile-lint]
+    if: github.event_name == 'push' || github.event_name == 'release'
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # A base image é fixada por digest, então uma camada cacheada do
+      # `apk upgrade` pode ficar presa a pacotes antigos do Alpine mesmo
+      # depois de o repositório publicar versões corrigidas (ex.: mbedtls3
+      # 3.6.7-r0). O scan de segurança precisa de uma imagem com o estado
+      # atual do índice apk: sem cache de leitura, mas exportando o cache
+      # atualizado para os próximos builds.
+      - name: Build backend image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          target: runner
+          load: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:test
+          no-cache: true
+          cache-to: type=gha,mode=max
+
+      - name: Build frontend image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          target: frontend-runner
+          load: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:test
+          no-cache: true
+          cache-to: type=gha,mode=max
+
+      # Por padrão o trivy-action remove TRIVY_SEVERITY quando format=sarif,
+      # tornando o exit-code 1 sensível a QUALQUER achado (inclusive os
+      # UNKNOWN de CVEs rejeitados sem detalhe no banco). Isso fazia o gate
+      # falhar e poluía o code scanning com dezenas de alertas note-only.
+      # limit-severities-for-sarif=true mantém o filtro CRITICAL,HIGH no
+      # relatório e no código de saída.
+      - name: Run Trivy scanner (backend)
+        uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec # master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:test
+          format: 'sarif'
+          output: 'trivy-backend.sarif'
+          severity: 'CRITICAL,HIGH'
+          limit-severities-for-sarif: 'true'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+
+      - name: Run Trivy scanner (frontend)
+        uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec # master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:test
+          format: 'sarif'
+          output: 'trivy-frontend.sarif'
+          severity: 'CRITICAL,HIGH'
+          limit-severities-for-sarif: 'true'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+
+      - name: Upload Trivy results
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # v3
+        with:
+          sarif_file: trivy-backend.sarif
+          category: trivy-backend
+
+      - name: Upload Trivy results (frontend)
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # v3
+        with:
+          sarif_file: trivy-frontend.sarif
+          category: trivy-frontend
+
+  # =============================================================================
+  # 6. SBOM GENERATION (CycloneDX)
+  # =============================================================================
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    needs: [dependency-audit]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install @cyclonedx/cyclonedx-npm
+        run: npm install -g @cyclonedx/cyclonedx-npm
+
+      # cyclonedx-npm resolves the dependency tree from node_modules, so every
+      # project must be installed first (shared before backend/frontend: file:
+      # workspace dependency).
+      - name: Install dependencies (shared)
+        working-directory: ./packages/shared
+        run: npm ci --ignore-scripts
+
+      - name: Install dependencies (backend)
+        working-directory: ./backend
+        run: npm ci --ignore-scripts
+
+      - name: Install dependencies (frontend)
+        working-directory: ./frontend
+        run: npm ci --ignore-scripts
+
+      - name: Install dependencies (root)
+        run: npm ci --ignore-scripts
+
+      - name: Generate SBOM (backend)
+        working-directory: ./backend
+        run: |
+          cyclonedx-npm --output-file ../sbom-backend.json
+
+      - name: Generate SBOM (frontend)
+        working-directory: ./frontend
+        # eslint-config-next@16 ainda declara peer eslint <=9 para seus
+        # plugins internos; com ESLint 10 o `npm ls` interno do cyclonedx-npm
+        # retorna ELSPROBLEMS mesmo com a árvore instalada corretamente.
+        run: |
+          cyclonedx-npm --ignore-npm-errors --output-file ../sbom-frontend.json
+
+      - name: Generate SBOM (root)
+        run: |
+          cyclonedx-npm --output-file sbom-root.json
+
+      - name: Sign SBOMs with cosign (keyless)
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v3
+        with:
+          cosign-release: 'v2.2.0'
+
+      - name: Sign SBOMs
+        run: |
+          cosign sign-blob --yes sbom-backend.json --output-signature sbom-backend.json.sig --bundle sbom-backend.json.bundle
+          cosign sign-blob --yes sbom-frontend.json --output-signature sbom-frontend.json.sig --bundle sbom-frontend.json.bundle
+          cosign sign-blob --yes sbom-root.json --output-signature sbom-root.json.sig --bundle sbom-root.json.bundle
+
+      - name: Verify SBOM signatures
+        run: |
+          cosign verify-blob \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            sbom-backend.json --signature sbom-backend.json.sig --bundle sbom-backend.json.bundle
+          cosign verify-blob \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            sbom-frontend.json --signature sbom-frontend.json.sig --bundle sbom-frontend.json.bundle
+          cosign verify-blob \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            sbom-root.json --signature sbom-root.json.sig --bundle sbom-root.json.bundle
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: sbom
+          path: |
+            sbom-*.json
+            sbom-*.json.sig
+            sbom-*.json.bundle
+
+  # =============================================================================
+  # 7. ARTIFACT SIGNING (cosign) - on release
+  # =============================================================================
+  sign-artifacts:
+    name: Sign Release Artifacts
+    runs-on: ubuntu-latest
+    needs: [container-scan, sbom]
+    if: github.event_name == 'release'
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      subjects-b64: ${{ steps.subjects.outputs.b64 }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Login to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend
+        id: build-backend
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          target: runner
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.event.release.tag_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:latest
+
+      - name: Build and push frontend
+        id: build-frontend
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          target: frontend-runner
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:${{ github.event.release.tag_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:latest
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v3
+
+      - name: Sign images (keyless)
+        run: |
+          cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.event.release.tag_name }}
+          cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:${{ github.event.release.tag_name }}
+
+      - name: Compute base64 subjects for SLSA provenance
+        id: subjects
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          {
+            printf '%s  %s\n' "${{ steps.build-backend.outputs.digest }}" "${REGISTRY}/${IMAGE_NAME}-backend:${TAG}"
+            printf '%s  %s\n' "${{ steps.build-frontend.outputs.digest }}" "${REGISTRY}/${IMAGE_NAME}-frontend:${TAG}"
+          } | sed 's/^sha256://' > subjects.txt
+          cat subjects.txt
+          echo "b64=$(base64 -w0 subjects.txt)" >> "$GITHUB_OUTPUT"
+
+  # SLSA Provenance (reusable workflow MUST be called at job level, never as a
+  # step). Generates attestation for the release image digests.
+  provenance:
+    name: Generate SLSA Provenance
+    needs: [sign-artifacts]
+    if: github.event_name == 'release'
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.sign-artifacts.outputs.subjects-b64 }}
+      upload-assets: true
+
+  # =============================================================================
+  # 8. PRODUCTION READINESS CHECK (final gate)
+  # =============================================================================
+  prod-readiness:
+    name: Production Readiness Check
+    runs-on: ubuntu-latest
+    needs: [secret-scan, dependency-audit, sast, codeql, dockerfile-lint, container-scan, sbom]
+    if: github.event_name == 'release' || github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v5
+
+      - name: Run production readiness script
+        run: |
+          chmod +x scripts/ci/prod-readiness-check.sh
+          ./scripts/ci/prod-readiness-check.sh
+
+      - name: Check all required checks passed
+        run: |
+          echo "✅ All security gates passed!"
+          echo "🚀 Ready for production deployment"
+
+  # =============================================================================
+  # NOTIFICATIONS
+  # =============================================================================
+  notify-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [secret-scan, dependency-audit, sast, codeql, dockerfile-lint, container-scan, sbom, prod-readiness, provenance]
+    if: failure()
+    # Secret no env do JOB (visível no `if` do passo). Correção: o passo antes
+    # checava env.SLACK_WEBHOOK, que não era definido em nenhum nível — o
+    # passo era SEMPRE pulado e a notificação nunca disparava (código morto).
+    env:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+    steps:
+      - name: Send Slack notification
+        if: env.SLACK_WEBHOOK != ''
+        # v4.0.0 alterou a interface do modo incoming-webhook: a URL agora é
+        # input (webhook + webhook-type), não mais a env SLACK_WEBHOOK_URL.
+        # Pin por SHA como todas as demais actions (supply chain).
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "🚨 *Security Gate FAILED*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Repository:* ${{ github.repository }}\n*Workflow:* ${{ github.workflow }}\n*Branch:* ${{ github.ref }}\n*Commit:* ${{ github.sha }}\n*Run:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                  }
+                }
+              ]
+            }

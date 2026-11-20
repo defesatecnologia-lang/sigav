@@ -1,0 +1,134 @@
+import {
+  Anchor,
+  Button,
+  Container,
+  Paper,
+  PasswordInput,
+  Text,
+  TextInput,
+  Title,
+} from "@mantine/core";
+import { useForm } from "@mantine/form";
+import Link from "next/link";
+import { useRouter } from "next/router";
+import { FormattedMessage } from "react-intl";
+import * as yup from "yup";
+import useConfig from "../../hooks/config.hook";
+import useTranslate from "../../hooks/useTranslate.hook";
+import useUser from "../../hooks/user.hook";
+import authService from "../../services/auth.service";
+import { getApiErrorField, getApiErrorMessage } from "../../utils/error.util";
+import toast from "../../utils/toast.util";
+
+const SignUpForm = () => {
+  const config = useConfig();
+  const router = useRouter();
+  const t = useTranslate();
+  const { refreshUser } = useUser();
+
+  const validationSchema = yup.object().shape({
+    email: yup.string().email(t("common.error.invalid-email")).required(),
+    username: yup
+      .string()
+      .min(3, t("common.error.too-short", { length: 3 }))
+      .required(t("common.error.field-required")),
+    password: yup
+      .string()
+      .min(8, t("common.error.too-short", { length: 8 }))
+      .required(t("common.error.field-required")),
+  });
+
+  const form = useForm({
+    initialValues: {
+      email: "",
+      username: "",
+      password: "",
+    },
+    validate: (values) => {
+      try {
+        validationSchema.validateSync(values, { abortEarly: false });
+        return {};
+      } catch (err: any) {
+        const errors: Record<string, string> = {};
+        err.inner?.forEach((e: any) => {
+          if (e.path) errors[e.path] = e.message;
+        });
+        return errors;
+      }
+    },
+  });
+
+  const signUp = async (email: string, username: string, password: string) => {
+    await authService
+      .signUp(email.trim(), username.trim(), password.trim())
+      .then(async (response) => {
+        if (response.data.verificationRequired) {
+          router.replace({
+            pathname: "/auth/verify/info",
+            query: { email: email.trim() },
+          });
+        } else {
+          const user = await refreshUser();
+          if (user?.isAdmin) {
+            router.replace("/admin/intro");
+          } else {
+            router.replace("/upload");
+          }
+        }
+      })
+      .catch((e) => {
+        const field = getApiErrorField(e);
+        if (field === "username" || field === "email") {
+          form.setFieldError(field, getApiErrorMessage(e) ?? t("signup.error.duplicated"));
+        } else {
+          toast.axiosError(e);
+        }
+      });
+  };
+
+  return (
+    <Container size={420} my={40}>
+      <Title order={2} ta="center" fw={900}>
+        <FormattedMessage id="signup.title" />
+      </Title>
+      {config.get("share.allowRegistration") && (
+        <Text color="dimmed" size="sm" ta="center" mt={5}>
+          <FormattedMessage id="signup.description" />{" "}
+          <Anchor component={Link} href={"signIn"} size="sm">
+            <FormattedMessage id="signup.button.signin" />
+          </Anchor>
+        </Text>
+      )}
+      <Paper withBorder shadow="md" p={30} mt={30} radius="md">
+        <form
+          onSubmit={form.onSubmit((values) =>
+            signUp(values.email, values.username, values.password),
+          )}
+        >
+          <TextInput
+            label={t("signup.input.username")}
+            placeholder={t("signup.input.username.placeholder")}
+            {...form.getInputProps("username")}
+          />
+          <TextInput
+            label={t("signup.input.email")}
+            placeholder={t("signup.input.email.placeholder")}
+            mt="md"
+            {...form.getInputProps("email")}
+          />
+          <PasswordInput
+            label={t("signin.input.password")}
+            placeholder={t("signin.input.password.placeholder")}
+            mt="md"
+            {...form.getInputProps("password")}
+          />
+          <Button fullWidth mt="xl" type="submit">
+            <FormattedMessage id="signup.button.submit" />
+          </Button>
+        </form>
+      </Paper>
+    </Container>
+  );
+};
+
+export default SignUpForm;

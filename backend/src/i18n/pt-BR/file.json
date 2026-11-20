@@ -1,0 +1,10 @@
+{
+  "invalidIdFormat": "Formato de ID inválido",
+  "notFound": "Arquivo não encontrado",
+  "passwordProtected": "Este compartilhamento é protegido por senha",
+  "alreadyCompleted": "O compartilhamento já foi concluído",
+  "notEnoughSpace": "Espaço insuficiente no servidor",
+  "unexpectedChunk": "Chunk inesperado recebido",
+  "maxSizeExceeded": "Tamanho máximo de compartilhamento excedido",
+  "typeUnverified": "Tipo do arquivo não pôde ser verificado"
+}

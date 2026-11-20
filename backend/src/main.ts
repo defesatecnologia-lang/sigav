@@ -1,0 +1,280 @@
+import { ClassSerializerInterceptor, Logger, LogLevel } from "@nestjs/common";
+import { NestFactory, Reflector } from "@nestjs/core";
+import { NestExpressApplication } from "@nestjs/platform-express";
+import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
+import bodyParser from "body-parser";
+import cookieParser from "cookie-parser";
+import cors from "cors";
+import { NextFunction, Request, Response } from "express";
+import * as crypto from "crypto";
+import * as fs from "fs";
+import helmet from "helmet";
+import { I18nValidationExceptionFilter, I18nValidationPipe, I18nService } from "nestjs-i18n";
+import { AppModule } from "./app.module";
+import { runInRequestContext } from "./common/request-context/request-context";
+import { ConfigService } from "./config/config.service";
+import {
+  DATA_DIRECTORY,
+  LOG_LEVEL_AVAILABLE,
+  LOG_LEVEL_DEFAULT,
+  LOG_LEVEL_ENV,
+} from "./constants";
+import { ThrottlerExceptionFilter } from "./throttler/throttler-exception.filter";
+
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const CSRF_COOKIE_NAME = "csrf_token";
+const CSRF_HEADER_NAME = "x-csrf-token";
+
+// VULN-21: a imagem combinada (Caddy+backend+frontend) roda com
+// NODE_ENV=docker — um valor que não é "production" e silenciosamente habilita
+// detalhes de validação e o Swagger. Tratamos qualquer NODE_ENV de deploy
+// (production|docker|staging) como produção para esses flags.
+const PRODUCTION_LIKE_NODE_ENVS = new Set(["production", "docker", "staging"]);
+const isProductionLike = () =>
+  PRODUCTION_LIKE_NODE_ENVS.has(process.env.NODE_ENV ?? "");
+
+function generateNestJsLogLevels(): LogLevel[] {
+  if (LOG_LEVEL_ENV) {
+    const levelIndex = LOG_LEVEL_AVAILABLE.indexOf(LOG_LEVEL_ENV as LogLevel);
+    if (levelIndex === -1) {
+      throw new Error(`log level ${LOG_LEVEL_ENV} unknown`);
+    }
+
+    return LOG_LEVEL_AVAILABLE.slice(levelIndex, LOG_LEVEL_AVAILABLE.length);
+  } else {
+    const levelIndex = LOG_LEVEL_AVAILABLE.indexOf(LOG_LEVEL_DEFAULT);
+    return LOG_LEVEL_AVAILABLE.slice(levelIndex, LOG_LEVEL_AVAILABLE.length);
+  }
+}
+
+export async function configureApp(
+  app: NestExpressApplication,
+  config: ConfigService,
+) {
+  // Body parsers - raw for octet-stream (file uploads) MUST come before JSON
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const chunkSize = config.getNumber("share.chunkSize");
+    bodyParser.raw({
+      type: "application/octet-stream",
+      limit: chunkSize,
+    })(req, res, next);
+  });
+
+  // JSON parser for all other requests
+  app.use(bodyParser.json({ limit: "10mb" }));
+  app.use(bodyParser.urlencoded({ extended: true, limit: "10mb" }));
+
+  app.useGlobalPipes(
+    new I18nValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+      disableErrorMessages: isProductionLike(),
+    }),
+  );
+  app.useGlobalFilters(
+    new I18nValidationExceptionFilter(),
+    new ThrottlerExceptionFilter(app.get(I18nService)),
+  );
+  app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
+
+  app.use(cookieParser());
+
+  app.set("trust proxy", process.env.TRUST_PROXY === "true");
+
+  const corsOriginsEnv = process.env.CORS_ORIGIN;
+  const corsOrigin = corsOriginsEnv
+    ? corsOriginsEnv.split(",").map((o) => o.trim())
+    : false;
+  app.use(
+    cors({
+      origin: corsOrigin,
+      credentials: true,
+    }),
+  );
+
+  // Correlation ID middleware (MED-04): attach a request id to every request
+  // and surface it via the X-Request-Id response header for traceability.
+  // GAP-02: also bind a request context to AsyncLocalStorage so any
+  // downstream call can include the correlation id (and eventually user id)
+  // in its log output via RequestContextLogger without threading it manually.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const incomingId =
+      (req.headers["x-request-id"] as string | undefined) ??
+      crypto.randomUUID();
+    req.headers["x-request-id"] = incomingId;
+    res.setHeader("X-Request-Id", incomingId);
+
+    const ip = req.ip ?? req.socket?.remoteAddress ?? undefined;
+    const ua = req.headers["user-agent"];
+    const userAgent =
+      (Array.isArray(ua) ? ua[0] : ua ?? "").slice(0, 512) || undefined;
+    runInRequestContext({ requestId: incomingId, ip, userAgent }, () => next());
+  });
+
+  // CSRF protection via double-submit cookie (CRIT-01).
+  // GET /api/auth/csrf-token sets an httpOnly+sameSite cookie with a random
+  // token; mutating requests must echo it back via the X-CSRF-Token header.
+  const isSecure = config.getBoolean("general.secureCookies");
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    // Endpoint that issues the CSRF token cookie
+    if (req.method === "GET" && req.path === "/api/auth/csrf-token") {
+      const token = crypto.randomBytes(32).toString("base64url");
+      res.cookie(CSRF_COOKIE_NAME, token, {
+        httpOnly: true,
+        sameSite: "strict",
+        secure: isSecure,
+        path: "/",
+        maxAge: 1000 * 60 * 60 * 24 * 30 * 3, // 3 months
+      });
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ token });
+      return;
+    }
+
+    // Enforce on mutating methods, except auth refresh/signOut which rely on
+    // sameSite=strict cookies and are safe by virtue of SameSite.
+    if (MUTATING_METHODS.has(req.method)) {
+      const cookieToken = req.cookies?.[CSRF_COOKIE_NAME] as
+        | string
+        | undefined;
+      const headerToken = req.headers[CSRF_HEADER_NAME] as
+        | string
+        | undefined;
+      // Constant-time comparison (length checked first to avoid throwing).
+      const tokensMatch =
+        !!cookieToken &&
+        !!headerToken &&
+        cookieToken.length === headerToken.length &&
+        crypto.timingSafeEqual(
+          Buffer.from(cookieToken),
+          Buffer.from(headerToken),
+        );
+      if (!cookieToken || !headerToken || cookieToken.length < 32 || !tokensMatch) {
+        res.status(403).json({ statusCode: 403, message: "csrf_invalid" });
+        return;
+      }
+    }
+
+    next();
+  });
+
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", "data:", "blob:"],
+          fontSrc: ["'self'", "data:"],
+          connectSrc: ["'self'"],
+          frameAncestors: ["'none'"],
+          baseUri: ["'self'"],
+          formAction: ["'self'"],
+          objectSrc: ["'none'"],
+          upgradeInsecureRequests: [],
+        },
+      },
+      crossOriginEmbedderPolicy: false,
+      crossOriginOpenerPolicy: { policy: "same-origin" },
+      crossOriginResourcePolicy: { policy: "same-origin" },
+      referrerPolicy: { policy: "same-origin" },
+      // HSTS: fonte única é o Caddy (reverse-proxy/Caddyfile.prod|lan) — o edge
+      // conhece o estado do TLS por variante (prod: 2 anos + preload; lan: 1
+      // ano; ip: sem HSTS). O backend NÃO emite Strict-Transport-Security para
+      // evitar header duplicado e drift de configuração
+      // (P1-04, PLANO-CORRECOES-2026-11-03).
+      strictTransportSecurity: false,
+    }),
+  );
+
+  // Permissions-Policy header (not supported by current helmet version)
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader(
+      "Permissions-Policy",
+      "geolocation=(), camera=(), microphone=()",
+    );
+    next();
+  });
+
+  // API Versioning middleware — supports /api/v{N}/ prefix and Accept header
+  // version negotiation. Adds X-API-Version and optional Sunset headers.
+  const VERSION_PATTERN = /^\/api\/v(\d+)\//;
+  const SUPPORTED_VERSIONS = ["1"];
+  const DEPRECATED_VERSIONS: Record<string, string> = {};
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    let version = "1";
+    const urlMatch = req.path.match(VERSION_PATTERN);
+    if (urlMatch) {
+      version = urlMatch[1];
+    } else {
+      const accept = req.headers["accept"] || "";
+      const acceptMatch = accept.match(/application\/vnd\.cs\.v(\d+)\+json/);
+      if (acceptMatch) version = acceptMatch[1];
+    }
+    res.setHeader("X-API-Version", version);
+    if (!SUPPORTED_VERSIONS.includes(version)) {
+      res.status(400).json({
+        statusCode: 400,
+        message: `unsupported_api_version`,
+        supportedVersions: SUPPORTED_VERSIONS,
+      });
+      return;
+    }
+    if (DEPRECATED_VERSIONS[version]) {
+      res.setHeader("X-API-Deprecated", "true");
+      res.setHeader("Sunset", DEPRECATED_VERSIONS[version]);
+    }
+    if (urlMatch) {
+      req.url = req.url.replace(VERSION_PATTERN, "/api/");
+    }
+    next();
+  });
+
+  await fs.promises.mkdir(`${DATA_DIRECTORY}/uploads/_temp`, {
+    recursive: true,
+  });
+
+  app.setGlobalPrefix("api");
+}
+
+async function createApp() {
+  const logLevels = generateNestJsLogLevels();
+  Logger.log(`Showing ${logLevels.join(", ")} messages`);
+
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    logger: logLevels,
+    bodyParser: false,
+  });
+
+  await configureApp(app, app.get<ConfigService>(ConfigService));
+
+  return app;
+}
+
+async function bootstrap() {
+  const app = await createApp();
+
+  const swaggerEnabled =
+    !isProductionLike() && process.env.SWAGGER_ENABLED === "true";
+  if (swaggerEnabled) {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle("Controle Share Videos API")
+      .setVersion("1.0")
+      .build();
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup("api/swagger", app, document);
+  }
+
+  await app.listen(
+    parseInt(process.env.BACKEND_PORT || process.env.PORT || "8080"),
+  );
+
+  const logger = new Logger("UnhandledAsyncError");
+  process.on("unhandledRejection", (e) => logger.error(e));
+}
+
+if (require.main === module) {
+  bootstrap();
+}
