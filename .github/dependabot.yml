@@ -19,6 +19,13 @@ updates:
     directory: /frontend
     schedule:
       interval: weekly
+    # typescript-eslint (e o eslint-config-next que o embute) ainda não
+    # suporta TS 7.0 — o lint falha com "typescript-eslint does not support
+    # TS 7.0". Reavaliar quando o suporte a TS >= 7.1 for publicado:
+    # https://github.com/typescript-eslint/typescript-eslint/issues/10940
+    ignore:
+      - dependency-name: typescript
+        versions: ["7.x"]
 
   # Pacote compartilhado
   - package-ecosystem: npm
