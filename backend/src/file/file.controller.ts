@@ -226,7 +226,7 @@ export class FileController {
         fileSize = meta?.size != null ? meta.size.toString() : null;
         mimeType = mime.lookup(name) || null;
       } catch {
-        fileSize = null;
+        // Mantem os valores padrao (null) quando os metadados falham.
       }
       const context = await buildAuditContext(
         this.prisma,
@@ -666,8 +666,7 @@ export class FileController {
       fileName = meta?.name ?? null;
       fileSize = meta?.size != null ? meta.size.toString() : null;
     } catch {
-      fileName = null;
-      fileSize = null;
+      // Mantem os valores padrao (null) quando os metadados falham.
     }
 
     await this.fileService.remove(shareId, fileId);

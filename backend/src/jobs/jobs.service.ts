@@ -7,6 +7,7 @@ import { ConfigService } from "../config/config.service";
 import {
   IUploadRepository,
   type IUploadRepository as IUploadRepositoryType,
+  type UploadRepositoryDirectoryEntry,
 } from "../storage/upload-repository.interface";
 import { ELIMINATED_EMAIL_DOMAIN } from "../privacy/privacy.service";
 
@@ -125,7 +126,7 @@ export class JobsService {
   async deleteTemporaryFiles() {
     let filesDeleted = 0;
 
-    let shareDirectories = [];
+    let shareDirectories: UploadRepositoryDirectoryEntry[];
     try {
       shareDirectories = (await this.repository.listShareDirectories()).filter(
         (dirent) => dirent.isDirectory,
