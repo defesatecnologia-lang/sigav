@@ -12,7 +12,7 @@ import {
   StreamableFile,
 } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
-import contentDisposition from "content-disposition";
+import { create as contentDisposition } from "content-disposition";
 import { Request, Response } from "express";
 import { DownloadLogService } from "../download-log/download-log.service";
 import { User } from "../../prisma/generated/prisma/client";
@@ -226,7 +226,7 @@ export class FileController {
         fileSize = meta?.size != null ? meta.size.toString() : null;
         mimeType = mime.lookup(name) || null;
       } catch {
-        fileSize = null;
+        // Mantem os valores padrao (null) quando os metadados falham.
       }
       const context = await buildAuditContext(
         this.prisma,
@@ -666,8 +666,7 @@ export class FileController {
       fileName = meta?.name ?? null;
       fileSize = meta?.size != null ? meta.size.toString() : null;
     } catch {
-      fileName = null;
-      fileSize = null;
+      // Mantem os valores padrao (null) quando os metadados falham.
     }
 
     await this.fileService.remove(shareId, fileId);

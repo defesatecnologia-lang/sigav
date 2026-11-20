@@ -46,17 +46,20 @@ export class ReauthGuard implements CanActivate {
 
     const session = await this.sessionService.findByAccessToken(accessToken);
 
-    const reauthenticatedAt = session?.refreshToken?.reauthenticatedAt;
-    if (!reauthenticatedAt) this.raiseReauthRequired();
+    const refreshToken = session?.refreshToken;
+    const reauthenticatedAt = refreshToken?.reauthenticatedAt;
+    if (!refreshToken?.id || !reauthenticatedAt) this.raiseReauthRequired();
 
     const { value, unit } = this.config.getTimespan("general.reauthWindow");
     const windowMs = timespanToMs({ value, unit });
     if (Date.now() - reauthenticatedAt.getTime() > windowMs)
       this.raiseReauthRequired();
 
-    if (session?.refreshToken?.id) {
-      await this.tokenService.clearReauthenticated(session.refreshToken.id);
-    }
+    const consumed = await this.tokenService.consumeReauthenticated(
+      refreshToken.id,
+      reauthenticatedAt,
+    );
+    if (!consumed) this.raiseReauthRequired();
 
     return true;
   }

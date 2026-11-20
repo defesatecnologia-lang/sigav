@@ -162,11 +162,18 @@ export class TokenService {
    * para tornar o reauth de **uso único**: cada operação crítica consumida
    * exige nova confirmação de senha (+ TOTP) na operação seguinte.
    */
-  async clearReauthenticated(refreshTokenId: string): Promise<void> {
-    await this.prisma.refreshToken.update({
-      where: { id: refreshTokenId },
+  async consumeReauthenticated(
+    refreshTokenId: string,
+    expectedReauthenticatedAt: Date,
+  ): Promise<boolean> {
+    const result = await this.prisma.refreshToken.updateMany({
+      where: {
+        id: refreshTokenId,
+        reauthenticatedAt: expectedReauthenticatedAt,
+      },
       data: { reauthenticatedAt: null },
     });
+    return result.count === 1;
   }
 
   /**
