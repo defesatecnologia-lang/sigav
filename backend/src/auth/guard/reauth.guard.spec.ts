@@ -6,7 +6,7 @@ describe("ReauthGuard", () => {
     findByAccessToken: jest.Mock;
   };
   let tokenService: {
-    clearReauthenticated: jest.Mock;
+    consumeReauthenticated: jest.Mock;
   };
   let config: {
     getBoolean: jest.Mock;
@@ -32,7 +32,7 @@ describe("ReauthGuard", () => {
       ),
     };
     tokenService = {
-      clearReauthenticated: jest.fn(() => Promise.resolve()),
+      consumeReauthenticated: jest.fn(() => Promise.resolve(true)),
     };
     config = {
       getBoolean: jest.fn(() => false), // dev: cookie legado access_token
@@ -46,12 +46,42 @@ describe("ReauthGuard", () => {
   });
 
   it("aceita quando a sessão foi reautenticada dentro da janela e consome o marco (reauth de uso único)", async () => {
+    const session = makeSession(1);
+    sessionService.findByAccessToken.mockResolvedValue(session);
+
     await expect(
       guard.canActivate(makeContext({ access_token: "opaque" })),
     ).resolves.toBe(true);
 
-    expect(tokenService.clearReauthenticated).toHaveBeenCalledWith(
+    expect(tokenService.consumeReauthenticated).toHaveBeenCalledWith(
       "refresh-token-id",
+      session.refreshToken.reauthenticatedAt,
+    );
+  });
+
+  it("recusa quando outra requisição já consumiu o marco de reautenticação", async () => {
+    tokenService.consumeReauthenticated.mockResolvedValue(false);
+
+    await expect(
+      guard.canActivate(makeContext({ access_token: "opaque" })),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("permite apenas uma requisição concorrente consumir o mesmo marco", async () => {
+    tokenService.consumeReauthenticated
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    const results = await Promise.allSettled([
+      guard.canActivate(makeContext({ access_token: "opaque" })),
+      guard.canActivate(makeContext({ access_token: "opaque" })),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(
+      1,
+    );
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(
+      1,
     );
   });
 
@@ -62,7 +92,7 @@ describe("ReauthGuard", () => {
       guard.canActivate(makeContext({ access_token: "opaque" })),
     ).rejects.toBeInstanceOf(ForbiddenException);
 
-    expect(tokenService.clearReauthenticated).not.toHaveBeenCalled();
+    expect(tokenService.consumeReauthenticated).not.toHaveBeenCalled();
   });
 
   it("recusa quando o cookie de sessão está ausente", async () => {

@@ -2,7 +2,7 @@ import { TokenService } from "./token.service";
 
 describe("TokenService", () => {
   let prisma: {
-    refreshToken: { create: jest.Mock };
+    refreshToken: { create: jest.Mock; updateMany: jest.Mock };
     session: { create: jest.Mock; findUnique: jest.Mock };
     loginToken: { create: jest.Mock; updateMany: jest.Mock };
     user: { findUnique: jest.Mock };
@@ -13,7 +13,7 @@ describe("TokenService", () => {
 
   beforeEach(() => {
     prisma = {
-      refreshToken: { create: jest.fn() },
+      refreshToken: { create: jest.fn(), updateMany: jest.fn() },
       session: { create: jest.fn(), findUnique: jest.fn() },
       loginToken: { create: jest.fn(), updateMany: jest.fn() },
       user: { findUnique: jest.fn().mockResolvedValue(null) },
@@ -120,6 +120,30 @@ describe("TokenService", () => {
         .expiresAt as Date;
       const ttlMs = expiresAt.getTime() - before;
       expect(ttlMs).toBeGreaterThan(23.9 * 60 * 60 * 1000);
+    });
+  });
+
+  describe("consumeReauthenticated", () => {
+    it("consome o marco somente se o timestamp ainda for o esperado", async () => {
+      const reauthenticatedAt = new Date("2026-11-20T12:00:00.000Z");
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+
+      await expect(
+        service.consumeReauthenticated("rt1", reauthenticatedAt),
+      ).resolves.toBe(true);
+
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
+        where: { id: "rt1", reauthenticatedAt },
+        data: { reauthenticatedAt: null },
+      });
+    });
+
+    it("retorna falso quando o marco já foi consumido ou substituído", async () => {
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.consumeReauthenticated("rt1", new Date()),
+      ).resolves.toBe(false);
     });
   });
 
