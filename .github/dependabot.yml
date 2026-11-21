@@ -25,7 +25,12 @@ updates:
     # Reavaliar quando ts-jest e typescript-eslint suportarem TS >= 7.
     ignore:
       - dependency-name: typescript
-        versions: ["7.x"]
+        versions: [">=7.0.0"]
+      # check-disk-space@4 é ESM-only e removeu o export default; o backend
+      # é CommonJS e usa Jest, então build e testes falham com TS2349.
+      # Reavaliar quando o backend migrar para ESM.
+      - dependency-name: check-disk-space
+        versions: ["4.x"]
 
   # Frontend Next.js
   - package-ecosystem: npm
@@ -41,7 +46,7 @@ updates:
     # https://github.com/typescript-eslint/typescript-eslint/issues/10940
     ignore:
       - dependency-name: typescript
-        versions: ["7.x"]
+        versions: [">=7.0.0"]
 
   # Pacote compartilhado
   - package-ecosystem: npm
@@ -56,7 +61,7 @@ updates:
     # de file:../packages/shared e o bump do backend é rejeitado no CI.
     ignore:
       - dependency-name: typescript
-        versions: ["7.x"]
+        versions: [">=7.0.0"]
 
   # Suíte E2E (Playwright)
   - package-ecosystem: npm
