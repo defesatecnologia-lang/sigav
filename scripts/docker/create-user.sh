@@ -22,14 +22,16 @@ if ! id -u controle-user > /dev/null 2>&1; then
     fi
 fi
 
-# Change ownership of the data directory (RAID6 externo em produção).
-# DATA_DIRECTORY é injetado pelo compose; o fallback preserva stacks legados.
+# Persisted bind mounts must be provisioned on the host as PUID:PGID. This
+# container drops CAP_CHOWN, so it cannot repair ownership during startup.
 DATA_DIR="${DATA_DIRECTORY:-${DATA_ROOT:-/opt/app/data}}"
-mkdir -p "${DATA_DIR}"
-find "${DATA_DIR}" \( ! -group "${PGID}" -o ! -user "${PUID}" \) -exec chown "${PUID}:${PGID}" {} +
-
-# Change ownership of the frontend public directory
-find /opt/app/frontend/public \( ! -group "${PGID}" -o ! -user "${PUID}" \) -exec chown "${PUID}:${PGID}" {} +
+for dir in "${DATA_DIR}" /opt/app/frontend/public/img; do
+    if ! su-exec "${PUID}:${PGID}" sh -c \
+        'test -d "$1" && test -r "$1" && test -w "$1" && test -x "$1"' sh "$dir"; then
+        echo "Error: ${dir} must exist and be accessible (rwx) by ${PUID}:${PGID}; provision it on the host." >&2
+        exit 1
+    fi
+done
 
 # Switch to the non-root user
 exec su-exec "$PUID:$PGID" "$@"

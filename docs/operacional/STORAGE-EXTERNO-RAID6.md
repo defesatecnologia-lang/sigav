@@ -77,8 +77,10 @@ sudo chmod 750 /mnt/sstv-sigav
 sudo findmnt -T /mnt/sstv-sigav
 ```
 
-O `create-user.sh` também corrige ownership no startup, mas a checagem acima
-evita escrever no disco raiz caso o mount falhe.
+O `create-user.sh` valida acesso de leitura/escrita pelo UID/GID do serviço e
+falha explicitamente se os diretórios estiverem ausentes ou inacessíveis. Ele
+não tenta corrigir ownership: com `cap_drop: ALL`, o container não possui
+`CAP_CHOWN`. Corrija permissões no host e confirme o mount antes do deploy.
 
 ### 2.3 Deploy
 

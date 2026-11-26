@@ -74,6 +74,9 @@ services:
         max-file: "5"
 
   caddy:
+    # Keep the application network isolated while publishing the local port.
+    networks:
+      - staging-ingress
     # Hardening: read-only root filesystem
     read_only: true
     tmpfs:
@@ -105,8 +108,12 @@ services:
         max-file: "5"
 
 networks:
-  # Internal network — containers can communicate but have no internet access
+  # Internal network — backend/frontend can communicate without external access.
   local-network:
     driver: bridge
     name: controle-videos-local
     internal: true
+  # Only Caddy joins this network to receive the published host port.
+  staging-ingress:
+    driver: bridge
+    name: controle-videos-staging-ingress

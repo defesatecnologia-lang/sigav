@@ -93,6 +93,11 @@ CADDYFILE=local docker compose up -d --build
 > No modo `ip` e `local` os secrets/variáveis `DOMAIN`/`ACME_EMAIL` não são
 > usados pelo Caddyfile — podem ficar vazios (apenas avisos no boot).
 
+> **Redes Docker:** backend e frontend ficam apenas em `backend-net`
+> (`internal: true`). O Caddy também participa de `prod-ingress`, uma bridge
+> não interna necessária para o Docker publicar as portas 80/443 (e 5000 no
+> overlay LAN). Não conecte backend/frontend à rede de ingresso.
+
 ---
 
 ## 3. Variáveis de ambiente
