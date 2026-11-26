@@ -36,6 +36,18 @@ ss -ltnp 'sport = :80 or sport = :443'   # deve virar vazio
 > roda dentro dos containers. Instalar essas ferramentas no host é opcional,
 > apenas para desenvolvimento.
 
+### 1.1 Fluxo de mudança (padrão do repositório)
+
+1. Fazer o commit na branch **`fix/dev-development`** (nunca direto no `main`).
+2. Aguardar o CI e o Security Gate **verdes** nessa branch.
+3. Abrir PR de `fix/dev-development` → **`main`** e mergear após revisão.
+4. No servidor: `git fetch origin && git pull --ff-only origin main`, subir a
+   stack e validar `/api/health`.
+
+> O servidor consome `main`. Commits diretos no `main` pulam o CI e o PR —
+> evite. Exceções devem ser registradas e, de preferência, seguidas de PR
+> retrospectivo.
+
 ---
 
 ## 2. Variantes de deploy
@@ -43,7 +55,7 @@ ss -ltnp 'sport = :80 or sport = :443'   # deve virar vazio
 | Arquivo | Quando usar | Secrets | Dados persistentes |
 |---|---|---|---|
 | `docker-compose.yml` | Produção padrão (TLS Let's Encrypt) | variáveis de ambiente (`.env`) | volumes nomeados |
-| `docker-compose.prod.yml` | Produção com Docker Swarm/secrets externos | Docker secrets (arquivo) | bind mounts em `/mnt/sstv-sigav` (disco local) |
+| `docker-compose.prod.yml` | Produção com secrets em arquivo (`docker compose up`, não-Swarm) | arquivos `0600` em `scripts/secrets` (`*_FILE`) | bind mounts em `/mnt/sstv-sigav` (RAID6 externo) |
 | `docker-compose.local.yml` | Teste local (HTTP, sem TLS) | `.env.local` | volume nomeado (backend-data) |
 | `docker-compose.preprod.yml` | Ensaio pré-produção no servidor final (sobe sobre o `prod`, TLS interno por IP) | Docker secrets (ensaio) | bind mounts em `/mnt/sstv-sigav` |
 | `docker-compose.monitoring.yml` | Stack de observabilidade (prometheus, grafana, loki, promtail) | — | — |
