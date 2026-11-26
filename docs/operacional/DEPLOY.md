@@ -154,8 +154,8 @@ CADDYFILE=local docker compose up -d --build
 ## 4. Docker Secrets (produção com `docker-compose.prod.yml`)
 
 O `docker-compose.prod.yml` usa **secrets file-based**, compatíveis com
-`docker compose up` (não-Swarm). Crie os arquivos antes do `up`, com `0600`,
-no diretório `./scripts/secrets` (gitignored e fora do build context):
+`docker compose up` (não-Swarm). Crie os arquivos antes do `up`, com `0644`,
+em `./scripts/secrets` (diretório `0700`, gitignored e fora do build context):
 
 ```bash
 cd /opt/sistemas/sigav
@@ -168,8 +168,12 @@ openssl rand -base64 48              > scripts/secrets/admin_password
 openssl rand -base64 48              > scripts/secrets/jwt_secret
 # SMTP opcional:
 printf '%s' 'smtp-password'           > scripts/secrets/smtp_password
-chmod 600 scripts/secrets/*
+chmod 644 scripts/secrets/*
 ```
+
+> Use `0644` nos arquivos (o Docker preserva o mode no mount e os containers
+> rodam como UID `1002` / usuário `caddy`) e `0700` no diretório. `0600` dentro
+> do host provoca `Permission denied` ao ler `/run/secrets/*` no container.
 
 > `external: true` (Swarm/`docker stack deploy`) **não** funciona com
 > `docker compose up`: o Compose falha com `unsupported external secret`.
