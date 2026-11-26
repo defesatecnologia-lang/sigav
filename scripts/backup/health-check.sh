@@ -178,12 +178,13 @@ check_kms_access() {
 }
 
 check_disk_space() {
-    log "Verificando espaço em disco local..."
+    log "Verificando espaço em disco do RAID6 externo..."
+    local data_root="${DATA_ROOT:-/mnt/sstv-sigav}"
     local usage
-    usage=$(df /opt/app/data --output=pcent | tail -1 | tr -dc '0-9')
+    usage=$(df "${data_root}" --output=pcent | tail -1 | tr -dc '0-9')
     if [[ $usage -gt 85 ]]; then
         warn "Espaço em disco alto: ${usage}%"
-        send_slack "⚠️ *DISCO CHEIO* - Uso: ${usage}% em /opt/app/data"
+        send_slack "⚠️ *DISCO CHEIO* - Uso: ${usage}% em ${data_root}"
     else
         success "Espaço em disco OK: ${usage}%"
     fi

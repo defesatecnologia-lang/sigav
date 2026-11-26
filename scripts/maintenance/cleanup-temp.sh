@@ -3,8 +3,8 @@
 # Daily cleanup of stale temp uploads.
 #
 # The application writes incoming chunks to
-#   /opt/app/data/uploads/_temp/
-# before moving them into /opt/app/data/uploads/shares/
+#   ${DATA_ROOT:-/mnt/sstv-sigav}/uploads/_temp/
+# before moving them into ${DATA_ROOT:-/mnt/sstv-sigav}/uploads/shares/
 # upon completion. Aborted/interrupted uploads leave files behind; this
 # script removes them once they're older than RETENTION_MINUTES so the
 # _temp directory never grows unbounded.
@@ -20,7 +20,8 @@
 # =============================================================================
 set -euo pipefail
 
-TEMP_DIR="${TEMP_DIR:-/opt/app/data/uploads/_temp}"
+DATA_ROOT="${DATA_ROOT:-/mnt/sstv-sigav}"
+TEMP_DIR="${TEMP_DIR:-${DATA_ROOT}/uploads/_temp}"
 # 1440 min = 24h — tolerates long uploads started late the previous day.
 RETENTION_MINUTES="${RETENTION_MINUTES:-1440}"
 CONTAINER_USER="${CONTAINER_USER:-1002}"

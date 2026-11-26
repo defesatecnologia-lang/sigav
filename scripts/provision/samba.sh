@@ -2,7 +2,7 @@
 # =============================================================================
 # Provisioning script for the authenticated Samba share [videos].
 #
-# Goal: expose /opt/app/data/uploads/shares on the LAN
+# Goal: expose ${DATA_ROOT:-/mnt/sstv-sigav}/uploads/shares on the LAN
 # as \\servidor\videos so a Windows station can paste videos that appear
 # immediately inside the container (which reads the same bind mount).
 #
@@ -24,7 +24,7 @@
 #     /var/log/samba/audit.log (rsyslog drop-in installed below).
 #
 # Run as root on the production host, AFTER hardening.sh and AFTER the
-# /opt/app/data tree exists and is chowned 1002:1002.
+# ${DATA_ROOT:-/mnt/sstv-sigav} tree exists and is chowned 1002:1002.
 #
 # Re-runnable: idempotent — recreates the user/samba user/config each run.
 # =============================================================================
@@ -32,7 +32,8 @@ set -euo pipefail
 
 # --- Configuration ----------------------------------------------------------
 SHARE_NAME="${SHARE_NAME:-videos}"
-SHARE_PATH="${SHARE_PATH:-/opt/app/data/uploads/shares}"
+DATA_ROOT="${DATA_ROOT:-/mnt/sstv-sigav}"
+SHARE_PATH="${SHARE_PATH:-${DATA_ROOT}/uploads/shares}"
 UPLOADER_USER="${UPLOADER_USER:-uploader}"
 UPLOADER_UID="${UPLOADER_UID:-1102}"
 UPLOADER_PASSWORD="${UPLOADER_PASSWORD:-}"   # prompt if empty
@@ -212,7 +213,7 @@ echo "From a Windows station on the LAN:"
 echo "  1. Win+R -> \\\\${HOSTNAME:-servidor}\\${SHARE_NAME}"
 echo "  2. Authenticate as ${UPLOADER_USER} (<password set above>)"
 echo "  3. Paste video files; they appear immediately inside the container"
-echo "     at /opt/app/data/uploads/shares/"
+echo "     at ${SHARE_PATH}/"
 echo ""
 echo "Rotate the uploader password with:"
 echo "  smbpasswd ${UPLOADER_USER}"

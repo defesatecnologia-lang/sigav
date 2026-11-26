@@ -153,12 +153,12 @@ Ver guia completo em `docs/operacional/DEPLOY.md` e `docs/PLANO-DOMINIO.md`.
 
 ---
 
-## 5. Produção com Docker Swarm / disco local (`/opt/app`)
+## 5. Produção com Docker Swarm / RAID6 externo (`/mnt/sstv-sigav`)
 
 Usa `docker-compose.prod.yml` com:
 
 - **Secrets externos** (Docker Swarm): `domain`, `acme_email`, `admin_email`, `admin_username`, `admin_password`, `smtp_password`
-- **Bind mounts** para `/opt/app/data` (disco local; host = container)
+- **Bind mounts** para `/mnt/sstv-sigav` (RAID6 externo; host = container via `DATA_ROOT`)
 - **UID/GID 1002:1002** consistente host↔container
 
 Ver `docs/PLANO-IMPLANTACAO.md` e `docs/operacional/DEPLOY.md` §7–10.
@@ -272,7 +272,7 @@ sudo /opt/controle-share-videos-v1.0/scripts/backup.sh
 sudo /opt/controle-share-videos-v1.0/scripts/restore-test.sh
 
 # Ver integridade do SQLite (host = container no compose.prod)
-sqlite3 /opt/app/data/controle-videos.db "PRAGMA integrity_check;"
+sqlite3 /mnt/sstv-sigav/controle-videos.db "PRAGMA integrity_check;"
 ```
 
 Ver `docs/operacional/BACKUP_RESTORE.md`.

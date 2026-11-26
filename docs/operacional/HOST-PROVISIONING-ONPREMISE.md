@@ -66,19 +66,14 @@ sudo sshd -t && sudo systemctl restart ssh
 O checklist de segurança exige vídeos e banco **cifrados em repouso**. O compose
 não cifra o volume Docker: a cifra é feita na camada de bloco do host.
 
-> **Mudança de topologia:** os dados agora ficam no **disco local do sistema**
-> em `/opt/app/data` (bind mount do `docker-compose.prod.yml`), e não mais em
-> um drive externo/RAID6. Se o disco raiz já é cifrado (LUKS/dm-crypt na
-> instalação do Debian), o item #2 está atendido — registre a evidência e pule
-> para a §5. Se o disco local **não** é cifrado, use a camada de bloco do
-> sistema antes de criar os dados.
->
-> **Procedimento opcional (volume dedicado):** LUKS2 sobre um dispositivo
-> dedicado (`/dev/md0` neste exemplo) montado em `/opt/app`, com passphrase
-> guardada fora do host (cofre/serviço de segredos). Se a empresa optar por
-> volume gerenciado com criptografia nativa (cloud/EBS, storage com SED etc.),
-> anexar a comprovação ao aceite de risco da Fase 5 e marcar o item como N/A —
-> não deixar a decisão implícita.
+> **Topologia atual:** os dados ficam no **RAID6 externo** montado em
+> `/mnt/sstv-sigav` (bind mount do `docker-compose.prod.yml`, via `DATA_ROOT`),
+> e não mais no disco local do sistema. A cifra em repouso deve ser aplicada ao
+> próprio volume RAID6 — use LUKS2 sobre o dispositivo do array (abaixo). Se a
+> empresa optar por storage gerenciado com criptografia nativa (SED, etc.),
+> anexe a comprovação ao aceite de risco da Fase 5 e marque o item como N/A —
+> não deixe a decisão implícita. O disco raiz cifrado **não** cobre os dados do
+> RAID6. Ver também `docs/operacional/STORAGE-EXTERNO-RAID6.md`.
 
 ### 4.1 Pré-requisitos (apenas para volume dedicado)
 
@@ -98,17 +93,17 @@ sudo wipefs -a /dev/md0                   # ATENÇÃO: apaga assinaturas/partiç
 # LUKS2 + Argon2id (padrão do cryptsetup 2.x). Use passphrase forte e guarde-a
 # fora do host: perdê-la significa perder todos os dados.
 sudo cryptsetup luksFormat --type luks2 /dev/md0
-sudo cryptsetup open /dev/md0 app_crypt
-sudo mkfs.ext4 -L appdata /dev/mapper/app_crypt
+sudo cryptsetup open /dev/md0 sigav_crypt
+sudo mkfs.ext4 -L sigavdata /dev/mapper/sigav_crypt
 ```
 
 ### 4.3 Montagem e desbloqueio no boot
 
 ```bash
-sudo mkdir -p /opt/app
-echo 'appdata /opt/app ext4 defaults,nofail 0 2' | sudo tee -a /etc/fstab
+sudo mkdir -p /mnt/sstv-sigav
+echo '/dev/mapper/sigav_crypt /mnt/sstv-sigav ext4 defaults,nofail 0 2' | sudo tee -a /etc/fstab
 # /etc/crypttab: <nome> <dispositivo> <keyfile|none> <opções>
-echo 'app_crypt /dev/md0 none luks' | sudo tee -a /etc/crypttab
+echo 'sigav_crypt /dev/md0 none luks' | sudo tee -a /etc/crypttab
 sudo update-initramfs -u                  # Debian/Ubuntu
 ```
 
@@ -119,11 +114,11 @@ a escolha no aceite de risco.
 ### 4.4 Validar (Fase 1 do go-live)
 
 ```bash
-lsblk -f                                  # crypt + ext4 montado em /opt/app
-sudo cryptsetup status app_crypt          # type: LUKS2, cipher: aes-xts-plain64
-findmnt /opt/app                          # confirma a montagem cifrada
+lsblk -f                                  # crypt + ext4 montado em /mnt/sstv-sigav
+sudo cryptsetup status sigav_crypt        # type: LUKS2, cipher: aes-xts-plain64
+findmnt /mnt/sstv-sigav                   # confirma a montagem cifrada
 sudo cryptsetup luksDump /dev/md0 | grep -E 'Version|Cipher|PBKDF'
-sudo touch /opt/app/.luks-test && sync
+sudo touch /mnt/sstv-sigav/.luks-test && sync
 ```
 
 Registre a saída dos comandos como evidência na **Fase 1** do
@@ -133,13 +128,15 @@ de 🟡 depois dessa marcação.
 ## 5. Diretórios e secrets do Swarm
 
 ```bash
-# Mesmo caminho bind-mountado por docker-compose.prod.yml (dados + imagens).
-# Criar DEPOIS de montar o volume cifrado da seção 4 (se aplicável) — senão o
-# Docker cria o diretório como root no disco raiz e o backup/criptografia ficam
-# errados.
-sudo mkdir -p /opt/app/data/images
-sudo chown -R 1002:1002 /opt/app/data
-sudo chmod 750 /opt/app/data
+# Mesmo caminho bind-mountado por docker-compose.prod.yml (dados + imagens),
+# controlado pela variável DATA_ROOT = /mnt/sstv-sigav.
+# Criar DEPOIS de montar o RAID6 cifrado da seção 4 — senão o Docker cria o
+# diretório como root no disco raiz e o backup/criptografia ficam errados.
+sudo mountpoint -q /mnt/sstv-sigav || { echo "RAID6 não montado — ABORTANDO"; exit 1; }
+sudo mkdir -p /mnt/sstv-sigav/images /mnt/sstv-sigav/uploads/_temp /mnt/sstv-sigav/audit-worm
+sudo chown -R 1002:1002 /mnt/sstv-sigav
+sudo chmod 750 /mnt/sstv-sigav
+sudo findmnt -T /mnt/sstv-sigav
 
 # Secrets exigidos por docker-compose.prod.yml (valores do .env.production.local)
 printf '%s' "<ADMIN_EMAIL>"     | sudo docker secret create admin_email -

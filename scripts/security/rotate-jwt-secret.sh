@@ -8,7 +8,8 @@ set -euo pipefail
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-DATABASE_URL="${DATABASE_URL:-file:/opt/app/data/controle-videos.db}"
+DATA_ROOT="${DATA_ROOT:-/mnt/sstv-sigav}"
+DATABASE_URL="${DATABASE_URL:-file:${DATA_ROOT}/controle-videos.db}"
 SECRET_LENGTH="${SECRET_LENGTH:-64}"  # 512 bits para HS512
 DRY_RUN="${1:-}"
 LOG_FILE="${LOG_FILE:-/var/log/jwt-rotation.log}"
