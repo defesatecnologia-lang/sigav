@@ -16,7 +16,9 @@
 # Variáveis:
 #   TARGET_REF   (obrigatório) ref a deployar (commit sha ou tag).
 #   APP_DIR      diretório do repo no host (default /opt/controle-share-videos-v1.0).
-#   COMPOSE_FILE compose de produção (default docker-compose.prod.yml).
+#   COMPOSE_FILE  compose de produção (default docker-compose.prod.yml).
+#   COMPOSE_FILES lista separada por espaço para múltiplos overlays, ex.:
+#     "docker-compose.prod.yml docker-compose.lan-prod.yml"
 #   RUN_BACKUP   1 para executar scripts/backup.sh antes do deploy (default 0).
 #   BACKUP_DIR   destino do backup (repassado ao backup.sh).
 #   DEPLOY_USER  dono do deploy (default "deploy"; usado p/ ownership de git).
@@ -29,11 +31,19 @@ set -euo pipefail
 TARGET_REF="${TARGET_REF:?TARGET_REF is required (commit sha ou tag)}"
 APP_DIR="${APP_DIR:-/opt/controle-share-videos-v1.0}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+# COMPOSE_FILES aceita múltiplos arquivos (ex.: produção + overlay LAN).
+# COMPOSE_FILE continua funcionando para compatibilidade com o CI atual.
+COMPOSE_FILES="${COMPOSE_FILES:-${COMPOSE_FILE}}"
 RUN_BACKUP="${RUN_BACKUP:-0}"
 BACKUP_DIR="${BACKUP_DIR:-/opt/app/backups}"
 DEPLOY_USER="${DEPLOY_USER:-deploy}"
 
 cd "${APP_DIR}"
+
+read -r -a compose_files <<< "${COMPOSE_FILES}"
+compose() {
+  docker compose "${compose_files[@]/#/-f}" "$@"
+}
 
 if [ ! -d .git ]; then
   echo "[deploy] ERROR: ${APP_DIR} não é um repo git" >&2
@@ -46,12 +56,12 @@ log() { printf '[deploy] %s\n' "$*"; }
 log "iniciando deploy de ${TARGET_REF} (atual: ${PREV_REF}) em ${APP_DIR}"
 
 wait_for_health() {
-  local file="$1" retries="${HEALTH_RETRIES:-60}" interval="${HEALTH_INTERVAL:-5}"
+  local retries="${HEALTH_RETRIES:-60}" interval="${HEALTH_INTERVAL:-5}"
   local i
   for i in $(seq 1 "${retries}"); do
     local backend_status
     backend_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' \
-      "$(docker compose -f "${file}" ps -q backend 2>/dev/null | head -n1)" 2>/dev/null || echo "unknown")"
+      "$(compose ps -q backend 2>/dev/null | head -n1)" 2>/dev/null || echo "unknown")"
     if [ "${backend_status}" = "healthy" ]; then
       log "backend saudável (tentativa ${i})"
       return 0
@@ -66,9 +76,9 @@ rollback() {
   log "ROLLBACK: voltando para ${PREV_REF}"
   git checkout --detach "${PREV_REF}" 2>/dev/null || git checkout --detach "origin/main"
   export APP_VERSION="$(git describe --tags --always --dirty 2>/dev/null || git rev-parse --short HEAD)"
-  docker compose -f "${COMPOSE_FILE}" build || true
-  docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans || true
-  wait_for_health "${COMPOSE_FILE}" || log "AVISO: healthcheck falhou após rollback — intervenção manual necessária"
+  compose build || true
+  compose up -d --remove-orphans || true
+  wait_for_health || log "AVISO: healthcheck falhou após rollback — intervenção manual necessária"
   log "ROLLBACK concluído em ${PREV_REF}"
 }
 
@@ -102,22 +112,22 @@ export APP_VERSION="$(git describe --tags --always --dirty 2>/dev/null || git re
 log "checkout concluído: ${TARGET_SHORT} (versão ${APP_VERSION})"
 
 # --- 4. Build + up -----------------------------------------------------------
-log "build das imagens (${COMPOSE_FILE})..."
-if ! docker compose -f "${COMPOSE_FILE}" build; then
+log "build das imagens (${COMPOSE_FILES})..."
+if ! compose build; then
   log "ERROR: build falhou" >&2
   rollback
   exit 2
 fi
 
-log "subindo serviços (${COMPOSE_FILE})..."
-if ! docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans; then
+log "subindo serviços (${COMPOSE_FILES})..."
+if ! compose up -d --remove-orphans; then
   log "ERROR: up falhou" >&2
   rollback
   exit 2
 fi
 
 # --- 5. Healthcheck ----------------------------------------------------------
-if ! wait_for_health "${COMPOSE_FILE}"; then
+if ! wait_for_health; then
   log "ERROR: healthcheck falhou — executando rollback" >&2
   rollback
   exit 2
@@ -125,8 +135,8 @@ fi
 
 # --- 6. Saneamento pós-deploy (sem forçar migração manual) -------------------
 log "verificando migrações pendentes (deploy automático no entrypoint)..."
-if docker compose -f "${COMPOSE_FILE}" ps --format '{{.Service}}\t{{.Status}}' | grep -q "Restarting"; then
-  log "AVISO: há serviço em estado Restarting — verificar docker compose -f ${COMPOSE_FILE} ps"
+if compose ps --format '{{.Service}}\t{{.Status}}' | grep -q "Restarting"; then
+  log "AVISO: há serviço em estado Restarting — verificar docker compose -f ${COMPOSE_FILES} ps"
 fi
 
 log "deploy concluído com sucesso: ${TARGET_SHORT} (anterior: ${PREV_REF})"

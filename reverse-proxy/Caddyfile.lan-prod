@@ -1,0 +1,98 @@
+# =============================================================================
+# Caddyfile.lan-prod — LAN sem domínio, HTTPS autoassinado na porta 5000
+# =============================================================================
+# Usado pelo overlay docker-compose.lan-prod.yml (sobre docker-compose.prod.yml).
+#
+# Mantém o mesmo hardening do Caddyfile.prod (headers, CSP, rate limit, log com
+# pwd= redigido). A diferença é o TLS: como não há domínio, o Caddy emite um
+# certificado local (`tls internal`) com LAN_HOST como SAN — navegadores
+# exibem aviso até a CA local ser importada (ver DEPLOY.md §6.4).
+#
+# Variáveis injetadas pelo overlay:
+#   LAN_HOST = 10.10.10.153 (IP que os clientes usam)
+#   LAN_PORT = 5000         (porta publicada no host)
+#
+# Acesso correto: https://10.10.10.153:5000
+# (http://10.10.10.153:5000 NÃO funciona — a porta 5000 é só HTTPS; a porta 80
+#  redireciona para https://<LAN_HOST>:<LAN_PORT>.)
+# =============================================================================
+{
+	admin off
+	# Clientes que conectam por IP literal não enviam SNI (RFC 6066); sem isto
+	# o Caddy não saberia qual certificado apresentar e o handshake falha.
+	default_sni {$LAN_HOST}
+	auto_https disable_redirects
+}
+
+# Redirecionamento oportunista: quem abrir http://<ip>/ cai no HTTPS:5000.
+http://:80 {
+	redir https://{$LAN_HOST}:{$LAN_PORT}{uri} permanent
+}
+
+https://{$LAN_HOST}:{$LAN_PORT}, https://localhost:{$LAN_PORT} {
+	tls internal
+
+	# HSTS com TTL curto: protege contra downgrade, mas não "trava" o host por
+	# um ano caso a instalação migre para HTTP/domínio durante a implantação.
+	header {
+		Strict-Transport-Security "max-age=86400; includeSubDomains"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+		Cross-Origin-Embedder-Policy "require-corp"
+		Permissions-Policy "geolocation=(), camera=(), microphone=()"
+		-Server
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; frame-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+	}
+
+	# Rate limiting no edge (INFRA-HIGH-01).
+	rate_limit {
+		zone dynamic {
+			key {remote_host}
+			events 100
+			window 10s
+		}
+		zone auth {
+			match {
+				path /api/auth/signIn /api/auth/signUp /api/auth/token /api/auth/resetPassword* /api/auth/verify* /api/auth/totp/*
+			}
+			key {remote_host}
+			events 10
+			window 60s
+		}
+	}
+
+	@health path /api/health
+	handle @health {
+		respond "OK" 200
+	}
+
+	handle /api/* {
+		reverse_proxy backend:8080 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	handle {
+		reverse_proxy frontend:3333 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# SEC-05: redige o valor de pwd= nos access logs.
+	log {
+		output stdout
+		format filter {
+			request>uri query {
+				replace pwd REDACTED
+			}
+			wrap json
+		}
+	}
+}

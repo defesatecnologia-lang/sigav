@@ -438,7 +438,8 @@ docker compose up -d --build
 |---|---|
 | `docker-compose.yml` | Produção padrão (backend, frontend, caddy; admin e TLS via variáveis de ambiente — `DOMAIN`, `ACME_EMAIL`, `ADMIN_*`, `JWT_SECRET`) |
 | `docker-compose.local.yml` | Ambiente de teste local — topologia de produção (backend, frontend e caddy em containers separados), sem TLS, entrada única `:3000`, com `.env.local` |
-| `docker-compose.prod.yml` | Produção com secrets externos (Docker Swarm), TLS via Caddy 2.9 e dados no disco local (`/mnt/sstv-sigav`) |
+| `docker-compose.prod.yml` | Produção com secrets externos (Docker Swarm), TLS via Caddy 2.9 e dados no RAID6 (`/mnt/sstv-sigav`) |
+| `docker-compose.lan-prod.yml` | Overlay de produção em LAN sem domínio: HTTPS autoassinado em `https://10.10.10.153:5000`, sobre o `prod` |
 | `docker-compose.monitoring.yml` | Observabilidade (prometheus, alertmanager, grafana, loki, promtail, node-exporter) |
 
 O serviço `caddy` monta `Caddyfile.${CADDYFILE:-prod}` em
@@ -449,6 +450,10 @@ O serviço `caddy` monta `Caddyfile.${CADDYFILE:-prod}` em
 | `prod` (default) | `Caddyfile.prod` | TLS Let's Encrypt (domínio No-IP ou próprio) |
 | `ip` | `Caddyfile.ip` | Acesso por IP — HTTP `:80` ou `tls internal` `:443` |
 | `local` | `Caddyfile.local` | Homologação/LAN sem TLS (`:3000`) |
+
+Para produção em LAN sem domínio (HTTPS autoassinado na porta 5000) use o
+overlay: `docker compose -f docker-compose.prod.yml -f docker-compose.lan-prod.yml up -d --build`
+(veja `docs/operacional/DEPLOY.md` §6.4).
 
 Exemplo — acesso por IP: `CADDYFILE=ip docker compose up -d --build` (veja
 `docs/operacional/DEPLOY.md` §6.2).

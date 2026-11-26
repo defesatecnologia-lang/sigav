@@ -480,8 +480,36 @@ async function migrateConfigVariables() {
   }
 }
 
+/**
+ * Deploy sem domínio: APP_URL define general.appUrl também em bancos já
+ * existentes (o seed normal preserva valores editados pelo admin).
+ * A variável é opcional; sem ela nada é alterado.
+ */
+async function applyEnvironmentOverrides() {
+  const rawAppUrl = process.env.APP_URL?.trim();
+  if (!rawAppUrl) return;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawAppUrl);
+  } catch {
+    throw new Error(`APP_URL inválida: ${rawAppUrl}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`APP_URL deve usar http(s): ${rawAppUrl}`);
+  }
+
+  const appUrl = rawAppUrl.replace(/\/+$/, "");
+  await prisma.config.update({
+    where: { name_category: { name: "appUrl", category: "general" } },
+    data: { value: appUrl },
+  });
+  console.log(`[config.seed] general.appUrl = ${appUrl} (via APP_URL)`);
+}
+
 seedConfigVariables()
   .then(() => migrateConfigVariables())
+  .then(() => applyEnvironmentOverrides())
   .then(async () => {
     await prisma.$disconnect();
   })
