@@ -141,20 +141,28 @@ CADDYFILE=local docker compose up -d --build
 
 ## 4. Docker Secrets (produção com `docker-compose.prod.yml`)
 
-A variante Swarm usa **arquivos de secret** lidos via `*_FILE`. As secrets
-devem ser criadas **externamente** antes do `compose up`:
+O `docker-compose.prod.yml` usa **secrets file-based**, compatíveis com
+`docker compose up` (não-Swarm). Crie os arquivos antes do `up`, com `0600`,
+no diretório `./scripts/secrets` (gitignored e fora do build context):
 
 ```bash
-docker swarm init   # se ainda não estiver em swarm mode
-echo "controle.example.gov.br"        | docker secret create domain -
-echo "sre@example.gov.br"             | docker secret create acme_email -
-echo "admin@empresa.local"            | docker secret create admin_email -
-echo "admin"                          | docker secret create admin_username -
-openssl rand -base64 32              | docker secret create admin_password -
-openssl rand -base64 32              | docker secret create jwt_secret -
+cd /opt/sistemas/sigav
+mkdir -p scripts/secrets && chmod 700 scripts/secrets
+printf '%s' 'controle.example.gov.br' > scripts/secrets/domain
+printf '%s' 'sre@example.gov.br'      > scripts/secrets/acme_email
+printf '%s' 'admin@empresa.local'     > scripts/secrets/admin_email
+printf '%s' 'admin'                   > scripts/secrets/admin_username
+openssl rand -base64 48              > scripts/secrets/admin_password
+openssl rand -base64 48              > scripts/secrets/jwt_secret
 # SMTP opcional:
-echo "smtp-password"                  | docker secret create smtp_password -
+printf '%s' 'smtp-password'           > scripts/secrets/smtp_password
+chmod 600 scripts/secrets/*
 ```
+
+> `external: true` (Swarm/`docker stack deploy`) **não** funciona com
+> `docker compose up`: o Compose falha com `unsupported external secret`.
+> Se precisar de Swarm, troque `file:` por `external: true` e use
+> `docker secret create` / `docker stack deploy`.
 
 Os containers leem:
 

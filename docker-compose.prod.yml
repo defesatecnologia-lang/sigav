@@ -233,24 +233,28 @@ volumes:
     driver: local
 
 secrets:
-  # These should be created externally via: echo "value" | docker secret create name -
-  # Or via Docker Swarm / Portainer / etc.
+  # File-based secrets: compatível com `docker compose up` (não-Swarm).
+  # `external: true` é suportado apenas por Swarm/`docker stack deploy` e
+  # falha com "unsupported external secret" no `docker compose up`.
   #
-  # Note: the JWT secret is now a Docker secret shared between backend and frontend.
-  # It is generated at first boot by backend/prisma/seed/config.seed.ts (internal.jwtSecret, locked)
-  # and stored in the database. For Docker Swarm, create it with:
-  #   echo "value" | docker secret create jwt_secret -
+  # Crie os arquivos em ${SECRETS_DIR:-./scripts/secrets} no host, com 0600,
+  # ANTES do `up`. O diretório já é gitignored e excluído do build context.
+  # Ex.: printf '%s' 'admin@empresa.local' > ./scripts/secrets/admin_email
+  #     openssl rand -base64 48 > ./scripts/secrets/admin_password
+  #
+  # Nota: o JWT secret é compartilhado entre backend e frontend e também fica
+  # persistido no banco (config.seed.ts, internal.jwtSecret, locked=true).
   admin_email:
-    external: true
+    file: ${SECRETS_DIR:-./scripts/secrets}/admin_email
   admin_username:
-    external: true
+    file: ${SECRETS_DIR:-./scripts/secrets}/admin_username
   admin_password:
-    external: true
+    file: ${SECRETS_DIR:-./scripts/secrets}/admin_password
   smtp_password:
-    external: true
+    file: ${SECRETS_DIR:-./scripts/secrets}/smtp_password
   acme_email:
-    external: true
+    file: ${SECRETS_DIR:-./scripts/secrets}/acme_email
   domain:
-    external: true
+    file: ${SECRETS_DIR:-./scripts/secrets}/domain
   jwt_secret:
-    external: true
+    file: ${SECRETS_DIR:-./scripts/secrets}/jwt_secret
