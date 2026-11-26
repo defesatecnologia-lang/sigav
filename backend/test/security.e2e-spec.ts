@@ -31,6 +31,12 @@ describe("Security test suite §35 (e2e)", () => {
   const username2 = "sec35op";
   const password2 = "Sec35!Operador0";
 
+  // Terceiro usuário (auditor, sem admin) para o cenário 35.16: leitura
+  // administrativa completa, nenhuma escrita.
+  const email3 = "sec35-auditor@test.org";
+  const username3 = "sec35aud";
+  const password3 = "Sec35!Auditor0";
+
   async function getCsrf(server: Agent) {
     const res = await server.get("/api/auth/csrf-token").expect(200);
     return res.body.token as string;
@@ -125,6 +131,19 @@ describe("Security test suite §35 (e2e)", () => {
     await prisma.user.update({
       where: { email: email2 },
       data: { isAdmin: false, role: "operador" },
+    });
+
+    // Terceiro usuário: auditor (leitura total, nenhuma escrita).
+    const bootstrap3 = agent();
+    const csrf3 = await getCsrf(bootstrap3);
+    await bootstrap3
+      .post("/api/auth/signUp")
+      .set("x-csrf-token", csrf3)
+      .send({ email: email3, username: username3, password: password3 })
+      .expect(201);
+    await prisma.user.update({
+      where: { email: email3 },
+      data: { isAdmin: false, role: "auditor" },
     });
   });
 
@@ -571,5 +590,89 @@ describe("Security test suite §35 (e2e)", () => {
     // Sem CORS_ORIGIN configurado no ambiente de teste, cors origin é false
     // -> nenhum header CORS é adicionado.
     expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  // 35.16 — auditor: leitura administrativa total, zero escrita.
+  it("35.16: auditor reads every admin area but cannot mutate users, config, sessions, logs or shares", async () => {
+    const adminServer = agent();
+    const adminToken = await signInTotp(adminServer);
+    await createShare("sec35-3516-admin", adminServer, adminToken);
+
+    const auditorServer = agent();
+    const auditorCsrf = await getCsrf(auditorServer);
+    await auditorServer
+      .post("/api/auth/signIn")
+      .set("x-csrf-token", auditorCsrf)
+      .send({ email: email3, password: password3 })
+      .expect(200);
+
+    const auditor = () => auditorServer.set("x-csrf-token", auditorCsrf);
+
+    // Todas as áreas administrativas são legíveis pelo auditor.
+    for (const path of [
+      "/api/users",
+      "/api/configs/admin/general",
+      "/api/shares/all",
+      "/api/admin/download-logs",
+      "/api/admin/audit-logs",
+      "/api/admin/sessions",
+      "/api/admin/access-review",
+      "/api/system/info",
+    ]) {
+      await auditor().get(path).expect(200);
+    }
+
+    const adminUser = await prisma.user.findUniqueOrThrow({ where: { email } });
+    const auditorUser = await prisma.user.findUniqueOrThrow({
+      where: { email: email3 },
+    });
+
+    // Nenhuma mutação é permitida.
+    await auditor()
+      .post("/api/users")
+      .send({
+        username: "sec35-illegal",
+        email: "sec35-illegal@test.org",
+        password: "Xyz!123456",
+        role: "admin",
+      })
+      .expect(403);
+    await auditor()
+      .patch(`/api/users/${auditorUser.id}`)
+      .send({ role: "admin", isAdmin: true })
+      .expect(403);
+    await auditor().delete(`/api/users/${adminUser.id}`).expect(403);
+    await auditor()
+      .patch("/api/configs/admin")
+      .send([{ key: "general.appName", value: "hijacked" }])
+      .expect(403);
+    await auditor().post("/api/configs/admin/rotateJwtSecret").expect(403);
+    await auditor()
+      .post("/api/admin/sessions/revoke-all")
+      .send({ userId: adminUser.id })
+      .expect(403);
+    await auditor()
+      .post("/api/admin/access-review/certify")
+      .send({
+        userId: adminUser.id,
+        certified: true,
+        notes: "forced",
+        reviewerId: auditorUser.id,
+      })
+      .expect(403);
+    await auditor().delete("/api/shares/sec35-3516-admin").expect(403);
+
+    // Estado inalterado após as tentativas.
+    expect(
+      await prisma.user.count({ where: { email: "sec35-illegal@test.org" } }),
+    ).toBe(0);
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { email: email3 } })).role,
+    ).toBe("auditor");
+    expect(
+      await prisma.share.count({ where: { id: "sec35-3516-admin" } }),
+    ).toBe(1);
+
+    await prisma.share.delete({ where: { id: "sec35-3516-admin" } });
   });
 });

@@ -16,7 +16,7 @@ import { Response } from "express";
 import { Throttle, SkipThrottle } from "@nestjs/throttler";
 import { I18nService } from "nestjs-i18n";
 import { GetUser } from "../auth/decorator/getUser.decorator";
-import { Authenticated, AdminOnly } from "../auth/decorator/guards.decorator";
+import { AdminOrAuditor, Authenticated, AdminOnly } from "../auth/decorator/guards.decorator";
 import { ReauthRequired } from "../auth/decorator/reauth.decorator";
 import { ConfigService } from "../config/config.service";
 import { CreateUserDTO } from "./dto/createUser.dto";
@@ -77,9 +77,9 @@ export class UserController {
     expireAuthCookies(response, isSecure);
   }
 
-  // Global user operations (admin only)
+  // Global user operations: leitura também disponível ao auditor (somente leitura).
   @Get()
-  @AdminOnly()
+  @AdminOrAuditor()
   async list() {
     return new UserDTO().fromList(await this.userService.list() as unknown as Partial<UserDTO>[]);
   }

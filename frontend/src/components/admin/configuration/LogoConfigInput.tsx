@@ -10,11 +10,13 @@ const LogoConfigInput = ({
   setLogo,
   darkLogo,
   setDarkLogo,
+  readOnly = false,
 }: {
   logo: File | null;
   setLogo: Dispatch<SetStateAction<File | null>>;
   darkLogo: File | null;
   setDarkLogo: Dispatch<SetStateAction<File | null>>;
+  readOnly?: boolean;
 }) => {
   const isMobile = useMediaQuery("(max-width: 560px)");
   const t = useTranslate();
@@ -34,6 +36,7 @@ const LogoConfigInput = ({
         <Box style={{ width: isMobile ? "100%" : "50%" }}>
           <FileInput
             clearable
+            disabled={readOnly}
             leftSection={<TbUpload size={14} />}
             value={logo}
             onChange={(v) => setLogo(v)}
@@ -56,6 +59,7 @@ const LogoConfigInput = ({
         <Box style={{ width: isMobile ? "100%" : "50%" }}>
           <FileInput
             clearable
+            disabled={readOnly}
             leftSection={<TbUpload size={14} />}
             value={darkLogo}
             onChange={(v) => setDarkLogo(v)}

@@ -210,7 +210,9 @@ export class ShareController {
     @GetUser() user: User,
     @Req() req: Request,
   ) {
-    const isDeleterAdmin = user?.isAdmin === true || user?.role === "admin";
+    const isDeleterAdmin =
+      user?.role !== "auditor" &&
+      (user?.isAdmin === true || user?.role === "admin");
     await this.shareService.remove(id, isDeleterAdmin, {
       userId: user?.id,
       username: user?.username,

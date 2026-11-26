@@ -18,7 +18,7 @@ import { createKeyv, RedisClientOptions } from "@keyv/redis";
 import { I18nService } from "nestjs-i18n";
 import { Throttle, SkipThrottle } from "@nestjs/throttler";
 import { Request } from "express";
-import { AdminOnly, Public } from "../auth/decorator/guards.decorator";
+import { AdminOnly, AdminOrAuditor, Public } from "../auth/decorator/guards.decorator";
 import { GetUser } from "../auth/decorator/getUser.decorator";
 import { EmailService } from "../email/email.service";
 import { ConfigService } from "./config.service";
@@ -54,8 +54,10 @@ export class ConfigController {
     return new ConfigDTO().fromList(await this.configService.list());
   }
 
+  // Leitura de configuração: auditor inspeciona todos os valores; a escrita
+  // (PATCH /admin, testes, logo, rotação de JWT) continua exclusiva do admin.
   @Get("admin/:category")
-  @AdminOnly()
+  @AdminOrAuditor()
   async getByCategory(@Param("category") category: string) {
     return new AdminConfigDTO().fromList(
       await this.configService.getByCategory(category),

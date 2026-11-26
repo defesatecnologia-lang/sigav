@@ -5,6 +5,7 @@ import { TbPlus } from "react-icons/tb";
 import { FormattedMessage } from "react-intl";
 import Meta from "../../components/Meta";
 import AdminBackButton from "../../components/admin/AdminBackButton";
+import ReadOnlyNotice from "../../components/admin/ReadOnlyNotice";
 import ManageUserTable from "../../components/admin/users/ManageUserTable";
 import showCreateUserModal from "../../components/admin/users/showCreateUserModal";
 import useConfig from "../../hooks/config.hook";
@@ -12,6 +13,7 @@ import useTranslate from "../../hooks/useTranslate.hook";
 import useUser from "../../hooks/user.hook";
 import userService from "../../services/user.service";
 import User from "../../types/user.type";
+import { isAdminUser } from "../../utils/userRole.util";
 import { withReauth } from "../../utils/reauth.util";
 import toast from "../../utils/toast.util";
 
@@ -23,6 +25,7 @@ const Users = () => {
   const modals = useModals();
   const t = useTranslate();
   const { user: currentUser } = useUser();
+  const canManage = isAdminUser(currentUser);
 
   const getUsers = () => {
     setIsLoading(true);
@@ -120,21 +123,24 @@ const Users = () => {
             <FormattedMessage id="admin.users.title" />
           </Title>
         </Group>
-        <Button
-          onClick={() =>
-            showCreateUserModal(
-              modals,
-              config.get("smtp.enabled"),
-              getUsers,
-              currentUser,
-            )
-          }
-          leftSection={<TbPlus size={20} />}
-        >
-          <FormattedMessage id="common.button.create" />
-        </Button>
+        {canManage && (
+          <Button
+            onClick={() =>
+              showCreateUserModal(
+                modals,
+                config.get("smtp.enabled"),
+                getUsers,
+                currentUser,
+              )
+            }
+            leftSection={<TbPlus size={20} />}
+          >
+            <FormattedMessage id="common.button.create" />
+          </Button>
+        )}
       </Group>
 
+      {!canManage && <ReadOnlyNotice />}
       <ManageUserTable
         users={users}
         getUsers={getUsers}
@@ -142,6 +148,7 @@ const Users = () => {
         toggleUserActivation={toggleUserActivation}
         isLoading={isLoading}
         currentUser={currentUser}
+        canManage={canManage}
       />
       <Space h="xl" />
     </>

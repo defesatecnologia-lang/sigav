@@ -179,6 +179,7 @@ export default {
   "admin.button.auditLogs": "auditoria de eventos",
   "admin.button.config": "Configuração",
   "admin.button.accessReview": "Revisão de acesso",
+  "admin.readOnly.notice": "Acesso de Auditor: visualização completa do sistema, sem permissão para criar, editar, desativar ou excluir usuários, compartilhamentos, configurações, sessões ou logs.",
   // END /admin
 
   // /admin/users

@@ -27,6 +27,7 @@ const ShareInformationsBody = ({
   maxExpiration,
   onShareUpdated,
   initiallyEditing,
+  readOnly = false,
 }: {
   share: MyShare;
   maxShareSize: number;
@@ -35,6 +36,7 @@ const ShareInformationsBody = ({
   maxExpiration?: Timespan;
   onShareUpdated?: (share: MyShare) => void;
   initiallyEditing: boolean;
+  readOnly?: boolean;
 }) => {
   const t = translateOutsideContext();
   const [currentShare, setCurrentShare] = useState(share);
@@ -61,7 +63,7 @@ const ShareInformationsBody = ({
     ? "Never"
     : dayjs(currentShare.expiration).format("LLL");
 
-  if (isEditing) {
+  if (isEditing && !readOnly) {
     return (
       <EditShareBody
         share={currentShare}
@@ -143,9 +145,11 @@ const ShareInformationsBody = ({
           {formattedMaxShareSize}
         </Text>
       </Flex>
-      <Button variant="light" onClick={() => setIsEditing(true)}>
-        {t("common.button.edit")}
-      </Button>
+      {!readOnly && (
+        <Button variant="light" onClick={() => setIsEditing(true)}>
+          {t("common.button.edit")}
+        </Button>
+      )}
     </Stack>
   );
 };

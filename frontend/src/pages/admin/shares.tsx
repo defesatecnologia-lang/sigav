@@ -4,11 +4,14 @@ import { useEffect, useState } from "react";
 import { FormattedMessage } from "react-intl";
 import Meta from "../../components/Meta";
 import AdminBackButton from "../../components/admin/AdminBackButton";
+import ReadOnlyNotice from "../../components/admin/ReadOnlyNotice";
 import ManageShareTable from "../../components/admin/shares/ManageShareTable";
 import DiskUsage from "../../components/admin/shares/DiskUsage";
 import useTranslate from "../../hooks/useTranslate.hook";
+import useUser from "../../hooks/user.hook";
 import shareService from "../../services/share.service";
 import { MyShare } from "../../types/share.type";
+import { isAdminUser } from "../../utils/userRole.util";
 import toast from "../../utils/toast.util";
 
 const Shares = () => {
@@ -20,6 +23,8 @@ const Shares = () => {
 
   const modals = useModals();
   const t = useTranslate();
+  const { user } = useUser();
+  const canManage = isAdminUser(user);
 
   const getShares = () => {
     setIsLoading(true);
@@ -76,6 +81,7 @@ const Shares = () => {
         <DiskUsage />
       </Group>
 
+      {!canManage && <ReadOnlyNotice />}
       <ManageShareTable
         shares={shares}
         updateShare={(updatedShare) =>
@@ -87,6 +93,7 @@ const Shares = () => {
         }
         deleteShare={deleteShare}
         isLoading={isLoading}
+        canManage={canManage}
       />
       <Space h="xl" />
     </>

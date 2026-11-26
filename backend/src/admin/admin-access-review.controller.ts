@@ -22,20 +22,22 @@ import {
 @ApiTags("Admin - Access Review")
 @ApiBearerAuth()
 @UseGuards(JwtGuard, RolesGuard)
-@Roles("admin")
 @Throttle({ default: { limit: 30, ttl: 60_000 } })
 @Controller("admin/access-review")
 export class AdminAccessReviewController {
   constructor(private accessReviewService: AccessReviewService) {}
 
   @Get()
-  @ApiOperation({ summary: "List all users for access review" })
+  // Auditor acompanha a revisão de acesso; somente admin emite atestados.
+  @Roles("admin", "auditor")
+  @ApiOperation({ summary: "List all users for access review (read-only for auditors)" })
   async getAccessReviewData(): Promise<AccessReviewRecord[]> {
     return this.accessReviewService.list();
   }
 
   @Post("certify")
-  @ApiOperation({ summary: "Certify user access review (signed attestation)" })
+  @Roles("admin")
+  @ApiOperation({ summary: "Certify user access review (signed attestation, admin only)" })
   async certifyReview(
     @Body() dto: ReviewCertifyDto,
     @GetUser() reviewer: User,

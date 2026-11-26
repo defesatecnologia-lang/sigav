@@ -144,14 +144,30 @@ Permissões:
 
 ## Auditor (`role = auditor`)
 
-Responsável pela fiscalização e acompanhamento das operações (acesso somente leitura administrativo).
+Responsável pela fiscalização e acompanhamento das operações. Tem **acesso total de leitura** a todas as áreas administrativas, mas **nenhuma permissão de escrita**.
 
-Permissões:
+Permissões de leitura (todas as telas `/admin*`):
 
-* Consultar logs de download completos
-* Consultar auditoria de acessos (views e downloads, com IP/User-Agent/timestamp — ver `docs/Padronizacao-03-auditoria-logs.md`)
-* Emitir relatórios de compliance
-* Acompanhar estatísticas de uso (sem poder alterar)
+* Listar todos os usuários (nome, e-mail, perfil, status, MFA) — `GET /api/users`
+* Inspecionar todas as configurações por categoria — `GET /api/configs/admin/:category` (valores de segredos ficam obscurados na UI, mas são retornados pela API — auditor é perfil de confiança)
+* Consultar todos os shares — `GET /api/shares/all`
+* Consultar logs de download completos — `GET /api/admin/download-logs`
+* Consultar trilha de auditoria (views e downloads, com IP/User-Agent/timestamp — ver `docs/Padronizacao-03-auditoria-logs.md`) — `GET /api/admin/audit-logs`
+* Consultar sessões administrativas — `GET /api/admin/sessions`
+* Acompanhar a revisão de acesso e exportar CSV — `GET /api/admin/access-review`
+* Consultar informações do sistema — `GET /api/system/info`
+* Emitir relatórios de compliance e acompanhar estatísticas de uso
+
+**Não pode** (endpoints permanecem `@Roles('admin')`, a UI oculta as ações):
+
+* Criar, editar, desativar ou deletar usuários (`POST/PATCH/DELETE /api/users`)
+* Alterar configurações, logos, credenciais SMTP, Redis ou o segredo JWT (`PATCH/POST /api/configs/admin/*`)
+* Revogar sessões (`POST /api/admin/sessions/*`)
+* Emitir atestados de revisão de acesso (`POST /api/admin/access-review/certify`)
+* Excluir ou editar shares de outros usuários pelo painel administrativo
+* Apagar, exportar por API administrativa ou modificar logs de download/auditoria
+
+> A separação é aplicada no backend (guards de papel) e na interface (botões/controles omitidos e aviso "somente leitura"). O auditor continua podendo gerenciar os **próprios** shares e o próprio perfil, como qualquer operador. O download de arquivos de shares de terceiros continua sujeito à senha/token e às regras de expiração do share.
 
 ### Criação de usuários e troca de senha no primeiro acesso
 

@@ -15,6 +15,7 @@ import { useMediaQuery } from "@mantine/hooks";
 import { TbInfoCircle } from "react-icons/tb";
 import { FormattedMessage } from "react-intl";
 import Meta from "../../../components/Meta";
+import ReadOnlyNotice from "../../../components/admin/ReadOnlyNotice";
 import AdminConfigInput from "../../../components/admin/configuration/AdminConfigInput";
 import ConfigurationTopNav from "../../../components/admin/configuration/ConfigurationTopNav";
 import LogoConfigInput from "../../../components/admin/configuration/LogoConfigInput";
@@ -23,8 +24,10 @@ import TestRedisButton from "../../../components/admin/configuration/TestRedisBu
 import CenterLoader from "../../../components/core/CenterLoader";
 import useConfig from "../../../hooks/config.hook";
 import useTranslate from "../../../hooks/useTranslate.hook";
+import useUser from "../../../hooks/user.hook";
 import configService from "../../../services/config.service";
 import { AdminConfig, UpdateConfig } from "../../../types/config.type";
+import { isAdminUser } from "../../../utils/userRole.util";
 import { camelToKebab } from "../../../utils/string.util";
 import toast from "../../../utils/toast.util";
 
@@ -44,6 +47,8 @@ export default function ConfigPage() {
 
   const isMobile = useMediaQuery("(max-width: 560px)");
   const config = useConfig();
+  const { user } = useUser();
+  const canManage = isAdminUser(user);
 
   let categoryId = "General";
   if (
@@ -68,7 +73,7 @@ export default function ConfigPage() {
   const [darkLogo, setDarkLogo] = useState<File | null>(null);
 
   const isEditingAllowed = (): boolean => {
-    return !configVariables || configVariables[0].allowEdit;
+    return canManage && (!configVariables || configVariables[0].allowEdit);
   };
 
   const saveConfigVariables = async () => {
@@ -161,6 +166,7 @@ export default function ConfigPage() {
       <Meta title={t("admin.config.title")} />
       <ConfigurationTopNav categoryId={categoryId} onCategoryChange={handleCategoryChange} />
       <Container size="lg" p="md">
+        {!canManage && <ReadOnlyNotice />}
         {!configVariables ? (
           <CenterLoader />
         ) : (
@@ -256,6 +262,7 @@ export default function ConfigPage() {
                               <AdminConfigInput
                                 key={configVariable.key}
                                 configVariable={configVariable}
+                                readOnly={!canManage}
                                 updateConfigVariable={updateConfigVariable}
                                 allConfigVariables={configVariables}
                                 updatedConfigVariables={updatedConfigVariables}
@@ -273,6 +280,7 @@ export default function ConfigPage() {
                           setLogo={setLogo}
                           darkLogo={darkLogo}
                           setDarkLogo={setDarkLogo}
+                          readOnly={!canManage}
                         />
                       )}
                       {categoryId == "appearance" &&
@@ -314,6 +322,7 @@ export default function ConfigPage() {
                               <AdminConfigInput
                                 key={customCssConfigVariable.key}
                                 configVariable={customCssConfigVariable}
+                                readOnly={!canManage}
                                 updateConfigVariable={updateConfigVariable}
                                 allConfigVariables={configVariables}
                                 updatedConfigVariables={updatedConfigVariables}
@@ -328,23 +337,25 @@ export default function ConfigPage() {
                   </>
                 );
               })()}
-              <Group mt="lg" justify="flex-end">
-                {categoryId == "smtp" && (
-                  <TestEmailButton
-                    configVariablesChanged={updatedConfigVariables.length != 0}
-                    saveConfigVariables={saveConfigVariables}
-                  />
-                )}
-                {categoryId == "cache" && (
-                  <TestRedisButton
-                    configVariablesChanged={updatedConfigVariables.length != 0}
-                    saveConfigVariables={saveConfigVariables}
-                  />
-                )}
-                <Button onClick={saveConfigVariables}>
-                  <FormattedMessage id="common.button.save" />
-                </Button>
-              </Group>
+              {canManage && (
+                <Group mt="lg" justify="flex-end">
+                  {categoryId == "smtp" && (
+                    <TestEmailButton
+                      configVariablesChanged={updatedConfigVariables.length != 0}
+                      saveConfigVariables={saveConfigVariables}
+                    />
+                  )}
+                  {categoryId == "cache" && (
+                    <TestRedisButton
+                      configVariablesChanged={updatedConfigVariables.length != 0}
+                      saveConfigVariables={saveConfigVariables}
+                    />
+                  )}
+                  <Button onClick={saveConfigVariables}>
+                    <FormattedMessage id="common.button.save" />
+                  </Button>
+                </Group>
+              )}
             </>
           )}
         </Container>
