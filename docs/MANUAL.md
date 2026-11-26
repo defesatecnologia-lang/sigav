@@ -71,7 +71,8 @@ O `docker-compose.staging.yml` é um **overlay** — sobe **em cima** do `docker
 - `security_opt: [no-new-privileges:true, seccomp=./docker/seccomp/default.json]`
 - `pids_limit: 512` + limites de CPU/memória (`deploy.resources`)
 - `logging: json-file` com rotação (10m × 5)
-- Rede `internal: true` (sem internet nos containers)
+- Backend/frontend ficam em rede `internal: true`; apenas o Caddy também entra
+  na bridge de ingresso não interna para receber as portas publicadas.
 
 ### Subir com hardening
 

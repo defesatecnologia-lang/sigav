@@ -6,7 +6,7 @@ services:
       dockerfile: Dockerfile
       target: runner
     restart: unless-stopped
-    # Internal network only — no direct external access (INFRA-HIGH-02)
+    # Backend is reachable only by the frontend and Caddy on the internal network.
     networks:
       - backend-net
     # Health check for orchestrator (INFRA-HIGH-02)
@@ -166,6 +166,8 @@ services:
     restart: unless-stopped
     networks:
       - backend-net
+      # Port publishing requires a non-internal bridge; only Caddy joins it.
+      - prod-ingress
     ports:
       - "80:80"
       - "443:443"
@@ -220,13 +222,15 @@ services:
       - DOMAIN_FILE=/run/secrets/domain
 
 networks:
-  # Internal network — containers can communicate but have no internet access
-  # and no direct external exposure. Only Caddy receives traffic via published
-  # host ports (80/443).
+  # Application network: backend/frontend remain isolated from external networks.
   backend-net:
     driver: bridge
     name: controle-share-videos-backend
     internal: true
+  # Ingress network: only Caddy joins this network and receives published traffic.
+  prod-ingress:
+    driver: bridge
+    name: controle-share-videos-prod-ingress
 
 # Bind mounts replace named volumes so persistent data lives on the external
 # RAID6 volume at ${DATA_ROOT:-/mnt/sstv-sigav} (DB + uploads + audit-worm)
