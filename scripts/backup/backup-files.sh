@@ -9,8 +9,9 @@ set -euo pipefail
 # =============================================================================
 # CONFIGURATION - ADJUST THESE VALUES
 # =============================================================================
+DATA_ROOT="${DATA_ROOT:-/mnt/sstv-sigav}"
 SOURCE_DIRS=(
-    "/opt/app/data/uploads"
+    "${DATA_ROOT}/uploads"
     "/opt/app/frontend/public/img"
 )
 # Debian 13 (trixie): /tmp é tmpfs (~50% RAM) — backups não podem ir para lá.

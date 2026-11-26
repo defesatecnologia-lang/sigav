@@ -135,13 +135,14 @@ O script exige no host:
 - comando `gpg`;
 - `GPG_RECIPIENT` definido quando `NODE_ENV=production`;
 - caminho correto do banco em `DB_FILE` (padrão:
-  `/opt/app/data/controle-videos.db`).
+  `/mnt/sstv-sigav/controle-videos.db`).
 
-> **Atenção (host × container):** dentro do container o banco fica em
-> `/opt/app/data/controle-videos.db`. No `docker-compose.prod.yml` o host usa o
-> **mesmo caminho** (`/opt/app/data:/opt/app/data`), então o `DB_FILE` padrão
-> funciona no host. Já no `docker-compose.yml` os dados ficam em volume Docker
-> nomeado (`backend-data`) e `/opt/app/data` não existe no host — nesse caso
+> **Atenção (host × container):** em produção o banco fica em
+> `/mnt/sstv-sigav/controle-videos.db` (`DATA_ROOT`). O
+> `docker-compose.prod.yml` bind-monta o mesmo caminho no host e no container,
+> então o `DB_FILE` padrão funciona no host. Já no `docker-compose.yml` os dados
+> ficam em volume Docker nomeado (`backend-data`, dentro do container em
+> `/opt/app/data`) e `/mnt/sstv-sigav` não existe nesse stack — nesse caso
 > execute o backup via `docker exec` ou aponte `DB_FILE` para o volume. Veja a
 > §4.3.
 

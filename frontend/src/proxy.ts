@@ -131,15 +131,9 @@ export default async function proxy(request: NextRequest) {
       path: "/upload",
     },
     {
-      condition:
-        user &&
-        (route.startsWith("/admin/users") ||
-          route.startsWith("/admin/config")) &&
-        user?.role !== "admin" &&
-        user?.isAdmin !== true,
-      path: "/upload",
-    },
-    {
+      // Admin e auditor acessam todas as telas /admin. Operadores e usuários
+      // comuns são redirecionados. As ações de escrita são ocultadas na UI
+      // para o auditor e bloqueadas no backend (@Roles('admin')).
       condition: routes.admin.contains(route) && user?.role !== "admin" && user?.role !== "auditor" && user?.isAdmin !== true,
       path: "/upload",
     },

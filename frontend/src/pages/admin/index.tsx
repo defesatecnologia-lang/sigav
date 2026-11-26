@@ -18,9 +18,11 @@ import {
   TbUsers,
 } from "react-icons/tb";
 import { FormattedMessage } from "react-intl";
+import ReadOnlyNotice from "../../components/admin/ReadOnlyNotice";
 import Meta from "../../components/Meta";
 import useTranslate from "../../hooks/useTranslate.hook";
 import useUser from "../../hooks/user.hook";
+import { isAuditorUser } from "../../utils/userRole.util";
 
 const Admin = () => {
   const theme = useMantineTheme();
@@ -34,7 +36,7 @@ const Admin = () => {
       title: t("admin.button.users"),
       icon: TbUsers,
       route: "/admin/users",
-      roles: ["admin"],
+      roles: ["admin", "auditor"],
     },
     {
       title: t("admin.button.shares"),
@@ -64,13 +66,13 @@ const Admin = () => {
       title: t("admin.button.config"),
       icon: TbSettings,
       route: "/admin/config/general",
-      roles: ["admin"],
+      roles: ["admin", "auditor"],
     },
     {
       title: t("admin.button.accessReview"),
       icon: TbShieldCheck,
       route: "/admin/access-review",
-      roles: ["admin"],
+      roles: ["admin", "auditor"],
     },
   ];
 
@@ -84,6 +86,7 @@ const Admin = () => {
       <Title mb={30} order={3}>
         <FormattedMessage id="admin.title" />
       </Title>
+      {isAuditorUser(user) && <ReadOnlyNotice />}
       <Stack justify="space-between" style={{ height: "calc(100vh - 180px)" }}>
         <Paper withBorder p={40}>
           <Grid>

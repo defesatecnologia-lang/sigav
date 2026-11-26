@@ -22,9 +22,11 @@ if ! id -u controle-user > /dev/null 2>&1; then
     fi
 fi
 
-# Change ownership of the data directory
-mkdir -p /opt/app/data
-find /opt/app/data \( ! -group "${PGID}" -o ! -user "${PUID}" \) -exec chown "${PUID}:${PGID}" {} +
+# Change ownership of the data directory (RAID6 externo em produção).
+# DATA_DIRECTORY é injetado pelo compose; o fallback preserva stacks legados.
+DATA_DIR="${DATA_DIRECTORY:-${DATA_ROOT:-/opt/app/data}}"
+mkdir -p "${DATA_DIR}"
+find "${DATA_DIR}" \( ! -group "${PGID}" -o ! -user "${PUID}" \) -exec chown "${PUID}:${PGID}" {} +
 
 # Change ownership of the frontend public directory
 find /opt/app/frontend/public \( ! -group "${PGID}" -o ! -user "${PUID}" \) -exec chown "${PUID}:${PGID}" {} +

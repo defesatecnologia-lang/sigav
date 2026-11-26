@@ -15,16 +15,21 @@ import { useEffect, useState } from "react";
 import { FormattedMessage } from "react-intl";
 import Meta from "../../../components/Meta";
 import AdminBackButton from "../../../components/admin/AdminBackButton";
+import ReadOnlyNotice from "../../../components/admin/ReadOnlyNotice";
 import SessionsTable from "../../../components/admin/sessions/SessionsTable";
 import useTranslate from "../../../hooks/useTranslate.hook";
+import useUser from "../../../hooks/user.hook";
 import adminSessionService from "../../../services/adminSession.service";
 import { AdminSession } from "../../../types/session.type";
+import { isAdminUser } from "../../../utils/userRole.util";
 import toast from "../../../utils/toast.util";
 
 const PAGE_SIZE = 20;
 
 const Sessions = () => {
   const t = useTranslate();
+  const { user } = useUser();
+  const canManage = isAdminUser(user);
 
   const [sessions, setSessions] = useState<AdminSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -125,10 +130,12 @@ const Sessions = () => {
         </Grid>
       </Stack>
 
+      {!canManage && <ReadOnlyNotice />}
       <SessionsTable
         sessions={sessions}
         isLoading={isLoading}
         onRevoke={revokeSession}
+        canManage={canManage}
       />
 
       <Space h="lg" />

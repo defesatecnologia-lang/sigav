@@ -5,7 +5,8 @@
 # =============================================================================
 set -euo pipefail
 
-DB_FILE="${DB_FILE:-/opt/app/data/controle-videos.db}"
+DATA_ROOT="${DATA_ROOT:-/mnt/sstv-sigav}"
+DB_FILE="${DB_FILE:-${DATA_ROOT}/controle-videos.db}"
 
 echo "=== Database integrity check ==="
 echo "Database: ${DB_FILE}"

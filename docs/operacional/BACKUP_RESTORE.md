@@ -27,14 +27,17 @@ controle-videos_YYYYMMDD_HHMMSS.db.gz.sig (gpg --detach-sign — dev/test)
 NODE_ENV=production \
 GPG_RECIPIENT=<email-ou-key-id> \
 BACKUP_DIR=/opt/app/backups \
-DB_FILE=/opt/app/data/controle-videos.db \
+DB_FILE=/mnt/sstv-sigav/controle-videos.db \
 ./scripts/backup.sh
 ```
 
-> O caminho acima é o **bind mount do `docker-compose.prod.yml`** no host, que
-> usa o mesmo caminho do container (`/opt/app/data:/opt/app/data`). No compose
-> padrão o banco fica em volume Docker nomeado — nesse caso execute o backup via
-> `docker exec` ou ajuste `DB_FILE` para o caminho do volume.
+> O caminho acima é o **bind mount do `docker-compose.prod.yml`** no host: o
+> RAID6 é montado em `/mnt/sstv-sigav` e o container usa o mesmo caminho
+> (`${DATA_ROOT}:${DATA_ROOT}`). Os scripts já derivam o default de `DATA_ROOT`,
+> então `DB_FILE` só precisa ser informado para sobrescrever. No compose local
+> (`docker-compose.yml`) os dados ficam em volume Docker nomeado
+> (`backend-data`, dentro do container em `/opt/app/data`) — nesse caso use
+> `docker exec` ou aponte `DB_FILE` para o volume.
 
 - `NODE_ENV=production` **sem** `GPG_RECIPIENT` → fail-closed: o script aborta
   (não produz backup legível/descriptografado em produção).
@@ -106,7 +109,7 @@ estiver vazio ou o exit code for 1, investigar imediatamente.
 ```bash
 set -euo pipefail
 BACKUP_DIR=/opt/app/backups
-APP_DATA=/opt/app/data   # mesmo caminho no host e no container (compose.prod)
+APP_DATA=/mnt/sstv-sigav   # mesmo caminho no host e no container (compose.prod)
 
 # 1. Localizar o backup mais recente
 LATEST=$(ls -1t "${BACKUP_DIR}"/controle-videos_*.db.gz.gpg | head -n1)

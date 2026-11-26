@@ -45,12 +45,16 @@ services:
       - no-new-privileges:true
       - seccomp=./docker/seccomp/default.json
     # Environment from secrets (INFRA-MED-04)
+    # DATA_ROOT = raiz única de persistência (RAID6 externo montado no host).
+    # Banco SQLite + uploads + auditoria ficam dentro dela. Sobrescreva com
+    # DATA_ROOT=<path> no ambiente do `docker compose` se o mount mudar.
     environment:
       - NODE_ENV=production
       - TRUST_PROXY=true
       - BACKEND_PORT=8080
-      - DATABASE_URL=file:/opt/app/data/controle-videos.db
-      - DATA_DIRECTORY=/opt/app/data
+      - DATA_ROOT=${DATA_ROOT:-/mnt/sstv-sigav}
+      - DATABASE_URL=file:${DATA_ROOT:-/mnt/sstv-sigav}/controle-videos.db
+      - DATA_DIRECTORY=${DATA_ROOT:-/mnt/sstv-sigav}
       - CADDY_DISABLED=true
       # Admin bootstrap from Docker secrets (file-based env so seed reads them)
       - ADMIN_EMAIL_FILE=/run/secrets/admin_email
@@ -65,9 +69,11 @@ services:
       - acme_email
       - domain
       - jwt_secret
-    # Bind mount local disk — data lives outside the container lifecycle.
-    # Caminho host = caminho container (/opt/app/data) para simplificar backup
-    # e restore executados no host.
+    # Bind mount do RAID6 externo — dados fora do ciclo de vida do container.
+    # Caminho host = caminho container (${DATA_ROOT:-/mnt/sstv-sigav}) para
+    # simplificar backup e restore executados no host (DB, uploads, audit-worm).
+    # O mount DEVE existir no host antes do `up` (ver
+    # docs/operacional/STORAGE-EXTERNO-RAID6.md); sem fallback para disco local.
     # (PLANO_HARDENING_DOCKER item 11) UID/GID consistente: host 1002:1002 =
     # container 1002:1002 (create-user.sh defaults PUID=1002/PGID=1002; runner
     # stage cria controle-user UID 1002). SELinux desativado no host → :z é
@@ -75,8 +81,8 @@ services:
     # frontend montam o MESMO diretório images — :Z (private) causaria conflito
     # de relabeling entre os dois containers em hosts SELinux.
     volumes:
-      - /opt/app/data:/opt/app/data:rw,z
-      - /opt/app/data/images:/opt/app/frontend/public/img:rw,z
+      - ${DATA_ROOT:-/mnt/sstv-sigav}:${DATA_ROOT:-/mnt/sstv-sigav}:rw,z
+      - ${DATA_ROOT:-/mnt/sstv-sigav}/images:/opt/app/frontend/public/img:rw,z
     # Entrypoint runs migrations, seed, then starts servers via Caddy
     entrypoint: ["sh", "./scripts/docker/create-user.sh"]
     command: ["sh", "./scripts/docker/entrypoint.sh"]
@@ -90,6 +96,10 @@ services:
       args:
         # Versão exibida no rodapé; exportada pelo deploy-prod.sh a cada deploy.
         - APP_VERSION=${APP_VERSION:-}
+        # SSR/middleware Next e rewrites /api chamam o backend da rede interna.
+        # Sem isto o default do Dockerfile (localhost:3000) aponta para o
+        # próprio container frontend e quebra /api/users/me no SSR e no proxy.
+        - API_URL=http://backend:8080
     restart: unless-stopped
     networks:
       - backend-net
@@ -130,15 +140,17 @@ services:
       - NODE_ENV=production
       - PORT=3333
       - HOSTNAME=0.0.0.0
+      - API_URL=http://backend:8080
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
     secrets:
       - domain
       - jwt_secret
-    # Bind mount to local disk — images shared with backend (host: 1002:1002).
+    # Bind mount no RAID6 externo — imagens compartilhadas com o backend
+    # (host: 1002:1002, mesma raiz DATA_ROOT).
     # (PLANO_HARDENING_DOCKER item 11) :z (compartilhado) e não :Z porque o
     # mesmo diretório também é montado pelo backend.
     volumes:
-      - /opt/app/data/images:/opt/app/frontend/public/img:rw,z
+      - ${DATA_ROOT:-/mnt/sstv-sigav}/images:/opt/app/frontend/public/img:rw,z
 
   caddy:
     container_name: controle-share-videos-caddy
@@ -188,6 +200,8 @@ services:
     volumes:
       # CADDYFILE seleciona a config do Caddy: prod (TLS Let's Encrypt,
       # default) | ip (HTTP/IP, Caddyfile.ip) | local (porta 3000).
+      # Para LAN sem domínio use o overlay docker-compose.lan-prod.yml, que
+      # monta Caddyfile.lan-prod (TLS autoassinado na porta 5000).
       # Em Swarm, os secrets DOMAIN/ACME_EMAIL só são usados pelo Caddyfile.prod.
       - ./reverse-proxy/Caddyfile.${CADDYFILE:-prod}:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -208,10 +222,10 @@ networks:
     name: controle-share-videos-backend
     internal: true
 
-# Bind mounts replace named volumes so persistent data lives on the local
-# disk at /opt/app/data rather than in
-# /var/lib/docker/volumes. Only caddy-data and caddy-config remain as
-# named volumes (let's-encrypt state, not user data).
+# Bind mounts replace named volumes so persistent data lives on the external
+# RAID6 volume at ${DATA_ROOT:-/mnt/sstv-sigav} (DB + uploads + audit-worm)
+# rather than in /var/lib/docker/volumes. Only caddy-data and caddy-config
+# remain as named volumes (let's-encrypt state, not user data).
 volumes:
   caddy-data:
     driver: local

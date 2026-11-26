@@ -1,0 +1,49 @@
+# =============================================================================
+# docker-compose.lan-prod.yml — overlay de PRODUÇÃO em LAN (sem domínio)
+# =============================================================================
+# Empilha sobre docker-compose.prod.yml. Não altera storage, secrets,
+# hardening, healthchecks nem limites de recurso: apenas troca o TLS para
+# autoassinado e publica o acesso em https://10.10.10.153:5000.
+#
+# Uso:
+#   docker compose -f docker-compose.prod.yml \
+#                  -f docker-compose.lan-prod.yml up -d --build
+#
+# Variáveis (default já aponta para o IP/porta combinados):
+#   LAN_HOST=10.10.10.153  LAN_PORT=5000
+#   Se trocar o IP/porta, defina também CORS_ORIGIN/APP_URL (ou deixe os
+#   defaults derivados abaixo, que usam as mesmas variáveis).
+#
+# O APP_URL é aplicado ao banco no boot pelo seed de configuração, inclusive
+# em bancos já existentes no RAID6 — links de share/e-mail saem com a URL LAN.
+# =============================================================================
+
+services:
+  backend:
+    environment:
+      # Origem explícita (credentials: true) para acesso direto ao backend.
+      - CORS_ORIGIN=https://${LAN_HOST:-10.10.10.153}:${LAN_PORT:-5000}
+      # general.appUrl é gravado no Config pelo seed; secureCookies continua
+      # true (há TLS real, embora autoassinado) para cookies __Host-.
+      - APP_URL=https://${LAN_HOST:-10.10.10.153}:${LAN_PORT:-5000}
+
+  frontend:
+    build:
+      args:
+        # SSR e middleware Next chamam o backend pela rede interna do compose
+        # (não pelo IP LAN nem por localhost, que apontaria para si mesmo).
+        API_URL: http://backend:8080
+    environment:
+      - API_URL=http://backend:8080
+
+  caddy:
+    environment:
+      - LAN_HOST=${LAN_HOST:-10.10.10.153}
+      - LAN_PORT=${LAN_PORT:-5000}
+    ports:
+      # Soma aos 80/443 do compose base; o Caddyfile.lan-prod escuta em 80
+      # (redirect) e na porta LAN configurada (HTTPS).
+      - "${LAN_PORT:-5000}:${LAN_PORT:-5000}"
+    volumes:
+      # Substitui o Caddyfile.prod montado pelo compose base (mesmo alvo).
+      - ./reverse-proxy/Caddyfile.lan-prod:/etc/caddy/Caddyfile:ro

@@ -7,8 +7,10 @@ set -euo pipefail
 
 # --- Configuration ----------------------------------------------------------
 BACKUP_DIR="${BACKUP_DIR:-/opt/app/backups}"
-DB_FILE="${DB_FILE:-/opt/app/data/controle-videos.db}"
-DATA_DIR="${DATA_DIR:-/opt/app/data}"
+# DATA_ROOT = mount do RAID6 externo (mesmo valor usado no docker-compose.prod.yml).
+DATA_ROOT="${DATA_ROOT:-/mnt/sstv-sigav}"
+DB_FILE="${DB_FILE:-${DATA_ROOT}/controle-videos.db}"
+DATA_DIR="${DATA_DIR:-${DATA_ROOT}}"
 RETENTION_DAYS="${RETENTION_DAYS:-30}"
 GPG_RECIPIENT="${GPG_RECIPIENT:-}"  # email for GPG encryption (required in production)
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)

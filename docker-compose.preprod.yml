@@ -13,8 +13,9 @@
 #      final e permitindo remover só o ensaio;
 #   3. define um project name próprio (volumes de ensaio isolados).
 #
-# O restante (imagem `target: runner`, bind mount /opt/app/data, secrets do
-# Swarm, hardening, healthchecks) vem integralmente de docker-compose.prod.yml.
+# O restante (imagem `target: runner`, bind mount do RAID6 em
+# ${DATA_ROOT:-/mnt/sstv-sigav}, secrets do Swarm, hardening, healthchecks)
+# vem integralmente de docker-compose.prod.yml.
 #
 # Uso (exige LAN_HOST; IP ou hostname que os clientes usarão):
 #   LAN_HOST=192.168.0.10 \
@@ -24,8 +25,8 @@
 #
 # Remoção do ensaio:
 #   docker compose -f docker-compose.prod.yml -f docker-compose.preprod.yml down -v --remove-orphans
-#   (o bind mount /opt/app/data NÃO é removido por `down -v`; apague manualmente
-#    depois de confirmar que não há nada que você queira preservar)
+#   (o bind mount ${DATA_ROOT:-/mnt/sstv-sigav} NÃO é removido por `down -v`;
+#    apague manualmente depois de confirmar que não há nada a preservar)
 # =============================================================================
 
 name: controle-share-videos-preprod

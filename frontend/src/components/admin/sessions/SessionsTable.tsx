@@ -18,12 +18,15 @@ const SessionsTable = ({
   sessions,
   isLoading,
   onRevoke,
+  canManage,
 }: {
   sessions: AdminSession[];
   isLoading: boolean;
   onRevoke: (session: AdminSession) => void;
+  canManage: boolean;
 }) => {
   const t = useTranslate();
+  const columnCount = canManage ? 9 : 8;
 
   return (
     <Box style={{ display: "block", overflowX: "auto" }}>
@@ -54,16 +57,18 @@ const SessionsTable = ({
             <th>
               <FormattedMessage id="admin.sessions.columns.userAgent" />
             </th>
-            <th>
-              <FormattedMessage id="admin.sessions.columns.actions" />
-            </th>
+            {canManage && (
+              <th>
+                <FormattedMessage id="admin.sessions.columns.actions" />
+              </th>
+            )}
           </tr>
         </thead>
         <tbody>
           {isLoading
             ? [...Array(10)].map((_, i) => (
                 <tr key={i}>
-                  {[...Array(9)].map((__, j) => (
+                  {[...Array(columnCount)].map((__, j) => (
                     <td key={j}>
                       <Skeleton height={20} />
                     </td>
@@ -71,7 +76,7 @@ const SessionsTable = ({
                 </tr>
               ))
             : sessions.length === 0
-              ? emptyRow
+              ? emptyRow(columnCount)
               : sessions.map((session) => (
                   <tr key={session.id}>
                     <td>
@@ -100,21 +105,23 @@ const SessionsTable = ({
                         "-"
                       )}
                     </td>
-                    <td>
-                      {session.state === "active" ||
-                      session.state === "idle" ? (
-                        <Button
-                          size="xs"
-                          variant="light"
-                          color="red"
-                          onClick={() => onRevoke(session)}
-                        >
-                          <FormattedMessage id="admin.sessions.revoke" />
-                        </Button>
-                      ) : (
-                        "-"
-                      )}
-                    </td>
+                    {canManage && (
+                      <td>
+                        {session.state === "active" ||
+                        session.state === "idle" ? (
+                          <Button
+                            size="xs"
+                            variant="light"
+                            color="red"
+                            onClick={() => onRevoke(session)}
+                          >
+                            <FormattedMessage id="admin.sessions.revoke" />
+                          </Button>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
         </tbody>
@@ -123,9 +130,9 @@ const SessionsTable = ({
   );
 };
 
-const emptyRow = (
+const emptyRow = (columnCount: number) => (
   <tr>
-    <td colSpan={9}>
+    <td colSpan={columnCount}>
       <Text color="dimmed" ta="center" py="lg">
         <FormattedMessage id="admin.sessions.empty" />
       </Text>

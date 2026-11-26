@@ -14,6 +14,7 @@ const ManageUserTable = ({
   toggleUserActivation,
   isLoading,
   currentUser,
+  canManage,
 }: {
   users: User[];
   getUsers: () => void;
@@ -21,6 +22,7 @@ const ManageUserTable = ({
   toggleUserActivation: (user: User) => void;
   isLoading: boolean;
   currentUser?: User | null;
+  canManage: boolean;
 }) => {
   const modals = useModals();
   const t = useTranslate();
@@ -67,7 +69,7 @@ const ManageUserTable = ({
             <th>
               <FormattedMessage id="admin.users.table.status" />
             </th>
-            <th></th>
+            {canManage && <th></th>}
           </tr>
         </thead>
         <tbody>
@@ -82,58 +84,60 @@ const ManageUserTable = ({
                   <td>{user.email}</td>
                   <td>{getRoleBadge(user.isAdmin ? "admin" : (user.role || "operador"))}</td>
                   <td>{getStatusBadge(user.isActivated)}</td>
-                  <td>
-                    <Group justify="flex-end">
-                      <HoverTip label={t("common.button.edit")}>
-                        <ActionIcon
-                          variant="light"
-                          color="blue"
-                          size={25}
-                          onClick={() =>
-                            showUpdateUserModal(modals, user, getUsers, currentUser)
-                          }
-                        >
-                          <TbEdit />
-                        </ActionIcon>
-                      </HoverTip>
-                      {user.id !== currentUser?.id &&
-                        (user.isActivated
-                          ? !(isAdminUser(user) && activeAdminCount === 1) && (
-                              <HoverTip label={t("admin.users.toggle.deactivate")}>
-                                <ActionIcon
-                                  variant="light"
-                                  color="gray"
-                                  size={25}
-                                  onClick={() => toggleUserActivation(user)}
-                                >
-                                  <TbUserOff />
-                                </ActionIcon>
-                              </HoverTip>
-                            )
-                          : (
-                              <HoverTip label={t("admin.users.toggle.activate")}>
-                                <ActionIcon
-                                  variant="light"
-                                  color="green"
-                                  size={25}
-                                  onClick={() => toggleUserActivation(user)}
-                                >
-                                  <TbUserCheck />
-                                </ActionIcon>
-                              </HoverTip>
-                            ))}
-                      <HoverTip label={t("common.button.delete")}>
-                        <ActionIcon
-                          variant="light"
-                          color="red"
-                          size={25}
-                          onClick={() => deleteUser(user)}
-                        >
-                          <TbTrash />
-                        </ActionIcon>
-                      </HoverTip>
-                    </Group>
-                  </td>
+                  {canManage && (
+                    <td>
+                      <Group justify="flex-end">
+                        <HoverTip label={t("common.button.edit")}>
+                          <ActionIcon
+                            variant="light"
+                            color="blue"
+                            size={25}
+                            onClick={() =>
+                              showUpdateUserModal(modals, user, getUsers, currentUser)
+                            }
+                          >
+                            <TbEdit />
+                          </ActionIcon>
+                        </HoverTip>
+                        {user.id !== currentUser?.id &&
+                          (user.isActivated
+                            ? !(isAdminUser(user) && activeAdminCount === 1) && (
+                                <HoverTip label={t("admin.users.toggle.deactivate")}>
+                                  <ActionIcon
+                                    variant="light"
+                                    color="gray"
+                                    size={25}
+                                    onClick={() => toggleUserActivation(user)}
+                                  >
+                                    <TbUserOff />
+                                  </ActionIcon>
+                                </HoverTip>
+                              )
+                            : (
+                                <HoverTip label={t("admin.users.toggle.activate")}>
+                                  <ActionIcon
+                                    variant="light"
+                                    color="green"
+                                    size={25}
+                                    onClick={() => toggleUserActivation(user)}
+                                  >
+                                    <TbUserCheck />
+                                  </ActionIcon>
+                                </HoverTip>
+                              ))}
+                        <HoverTip label={t("common.button.delete")}>
+                          <ActionIcon
+                            variant="light"
+                            color="red"
+                            size={25}
+                            onClick={() => deleteUser(user)}
+                          >
+                            <TbTrash />
+                          </ActionIcon>
+                        </HoverTip>
+                      </Group>
+                    </td>
+                  )}
                 </tr>
               ))}
         </tbody>

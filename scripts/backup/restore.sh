@@ -10,8 +10,9 @@ set -euo pipefail
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-DB_PATH="${DB_PATH:-/opt/app/data/controle-videos.db}"
-UPLOADS_DIR="${UPLOADS_DIR:-/opt/app/data/uploads}"
+DATA_ROOT="${DATA_ROOT:-/mnt/sstv-sigav}"
+DB_PATH="${DB_PATH:-${DATA_ROOT}/controle-videos.db}"
+UPLOADS_DIR="${UPLOADS_DIR:-${DATA_ROOT}/uploads}"
 FRONTEND_IMG_DIR="${FRONTEND_IMG_DIR:-/opt/app/frontend/public/img}"
 S3_BUCKET="${S3_BUCKET:-s3://controle-share-videos-backups}"
 KMS_KEY_ID="${KMS_KEY_ID:-arn:aws:kms:us-east-1:123456789012:key/abcd-efgh-1234}"

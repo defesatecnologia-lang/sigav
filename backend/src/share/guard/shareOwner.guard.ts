@@ -65,6 +65,10 @@ export class ShareOwnerGuard extends JwtGuard {
     // If the user is the creator of the share, allow access
     if (user && share.creatorId == user.id) return true;
 
+    // Auditor nunca recebe o bypass de admin — nem em registros legados onde
+    // isAdmin e role estejam divergentes. Ele lê shares via GET /shares/all.
+    if (user?.role === "auditor") return false;
+
     // If the user is an admin, allow access
     if (this.allowAdmin && user?.isAdmin) return true;
 

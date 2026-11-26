@@ -28,11 +28,13 @@ const ManageShareTable = ({
   updateShare,
   deleteShare,
   isLoading,
+  canManage,
 }: {
   shares: MyShare[];
   updateShare: (share: MyShare) => void;
   deleteShare: (share: MyShare) => void;
   isLoading: boolean;
+  canManage: boolean;
 }) => {
   const modals = useModals();
   const config = useConfig();
@@ -164,6 +166,8 @@ const ManageShareTable = ({
                               config.get("general.appUrl", true),
                               { value: 0, unit: "days" },
                               updateShare,
+                              false,
+                              !canManage,
                             );
                           }}
                         >
@@ -194,16 +198,18 @@ const ManageShareTable = ({
                           <TbLink />
                         </ActionIcon>
                       </HoverTip>
-                      <HoverTip label={t("common.button.delete")}>
-                        <ActionIcon
-                          variant="light"
-                          color="red"
-                          size={25}
-                          onClick={() => deleteShare(share)}
-                        >
-                          <TbTrash />
-                        </ActionIcon>
-                      </HoverTip>
+                      {canManage && (
+                        <HoverTip label={t("common.button.delete")}>
+                          <ActionIcon
+                            variant="light"
+                            color="red"
+                            size={25}
+                            onClick={() => deleteShare(share)}
+                          >
+                            <TbTrash />
+                          </ActionIcon>
+                        </HoverTip>
+                      )}
                     </Group>
                   </td>
                 </tr>

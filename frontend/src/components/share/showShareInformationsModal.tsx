@@ -15,6 +15,7 @@ const showShareInformationsModal = (
   maxExpiration?: Timespan,
   onShareUpdated?: (share: MyShare) => void,
   initiallyEditing = false,
+  readOnly = false,
 ) => {
   const t = translateOutsideContext();
 
@@ -29,6 +30,7 @@ const showShareInformationsModal = (
         maxExpiration={maxExpiration}
         onShareUpdated={onShareUpdated}
         initiallyEditing={initiallyEditing}
+        readOnly={readOnly}
       />
     ),
   });

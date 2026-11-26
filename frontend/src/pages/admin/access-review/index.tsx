@@ -32,12 +32,14 @@ import {
 } from "react-icons/tb";
 import Meta from "../../../components/Meta";
 import AdminBackButton from "../../../components/admin/AdminBackButton";
+import ReadOnlyNotice from "../../../components/admin/ReadOnlyNotice";
 import useTranslate from "../../../hooks/useTranslate.hook";
 import useUser from "../../../hooks/user.hook";
 import accessReviewService, {
   AccessReviewRecord,
   ReviewCertifyDto,
 } from "../../../services/accessReview.service";
+import { isAdminUser } from "../../../utils/userRole.util";
 import toast from "../../../utils/toast.util";
 
 type SortKey = "role" | "status" | "lastLoginAt" | "sharesOwned" | "lastReviewedAt";
@@ -81,6 +83,7 @@ const SortHeader = ({
 const AccessReview = () => {
   const t = useTranslate();
   const { user } = useUser();
+  const canManage = isAdminUser(user);
 
   const [records, setRecords] = useState<AccessReviewRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -226,6 +229,8 @@ const AccessReview = () => {
     URL.revokeObjectURL(link.href);
   };
 
+  const colSpan = canManage ? 9 : 8;
+
   const statsCards = [
     { label: t("admin.accessReview.stats.total"), value: stats.total, color: "gray" },
     { label: t("admin.accessReview.stats.overdue"), value: stats.overdue, color: "red" },
@@ -256,6 +261,7 @@ const AccessReview = () => {
         </Stack>
       </Group>
 
+      {!canManage && <ReadOnlyNotice />}
       <Grid mb="lg">
         {statsCards.map((card) => (
           <Grid.Col span={{ base: 12, sm: 6, md: 3 }} key={card.label}>
@@ -405,13 +411,13 @@ const AccessReview = () => {
               <th>
                 <FormattedMessage id="admin.accessReview.table.risk" />
               </th>
-              <th></th>
+              {canManage && <th></th>}
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={9}>
+                <td colSpan={colSpan}>
                   <Center py="xl">
                     <Loader />
                   </Center>
@@ -419,7 +425,7 @@ const AccessReview = () => {
               </tr>
             ) : sorted.length === 0 ? (
               <tr>
-                <td colSpan={9}>
+                <td colSpan={colSpan}>
                   <Center py="xl">
                     <Text c="dimmed">
                       <FormattedMessage id="admin.accessReview.empty" />
@@ -525,11 +531,13 @@ const AccessReview = () => {
                         {t(`admin.accessReview.risk.${record.riskLevel}`)}
                       </Badge>
                     </td>
-                    <td>
-                      <Button variant="light" size="xs" onClick={() => openReview(record)}>
-                        <FormattedMessage id="admin.accessReview.review.action" />
-                      </Button>
-                    </td>
+                    {canManage && (
+                      <td>
+                        <Button variant="light" size="xs" onClick={() => openReview(record)}>
+                          <FormattedMessage id="admin.accessReview.review.action" />
+                        </Button>
+                      </td>
+                    )}
                   </tr>
                 );
               })
@@ -538,59 +546,61 @@ const AccessReview = () => {
         </Table>
       </Box>
 
-      <Modal
-        opened={reviewOpened}
-        onClose={() => setReviewOpened(false)}
-        title={
-          reviewTarget
-            ? t("admin.accessReview.modal.title", { email: reviewTarget.email })
-            : undefined
-        }
-        size="lg"
-      >
-        {reviewTarget && (
-          <Stack gap="md">
-            <Alert color="blue" icon={<TbShieldCheck size={18} />}>
-              <Text size="sm">
-                {t("roles." + reviewTarget.role)} ·{" "}
-                {t(`admin.accessReview.status.${reviewTarget.status}`)} ·{" "}
-                {t(`admin.accessReview.risk.${reviewTarget.riskLevel}`)}
-              </Text>
-            </Alert>
+      {canManage && (
+        <Modal
+          opened={reviewOpened}
+          onClose={() => setReviewOpened(false)}
+          title={
+            reviewTarget
+              ? t("admin.accessReview.modal.title", { email: reviewTarget.email })
+              : undefined
+          }
+          size="lg"
+        >
+          {reviewTarget && (
+            <Stack gap="md">
+              <Alert color="blue" icon={<TbShieldCheck size={18} />}>
+                <Text size="sm">
+                  {t("roles." + reviewTarget.role)} ·{" "}
+                  {t(`admin.accessReview.status.${reviewTarget.status}`)} ·{" "}
+                  {t(`admin.accessReview.risk.${reviewTarget.riskLevel}`)}
+                </Text>
+              </Alert>
 
-            <Checkbox
-              checked={certified}
-              onChange={(e) => setCertified(e.currentTarget.checked)}
-              label={t("admin.accessReview.modal.certify")}
-              description={t("admin.accessReview.modal.certify.help")}
-            />
+              <Checkbox
+                checked={certified}
+                onChange={(e) => setCertified(e.currentTarget.checked)}
+                label={t("admin.accessReview.modal.certify")}
+                description={t("admin.accessReview.modal.certify.help")}
+              />
 
-            <Textarea
-              required
-              minRows={4}
-              autosize
-              label={t("admin.accessReview.modal.notes")}
-              description={t("admin.accessReview.modal.notes.help")}
-              placeholder={t("admin.accessReview.modal.notes.placeholder")}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
+              <Textarea
+                required
+                minRows={4}
+                autosize
+                label={t("admin.accessReview.modal.notes")}
+                description={t("admin.accessReview.modal.notes.help")}
+                placeholder={t("admin.accessReview.modal.notes.placeholder")}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
 
-            <Group justify="flex-end">
-              <Button variant="subtle" onClick={() => setReviewOpened(false)}>
-                <FormattedMessage id="common.button.cancel" />
-              </Button>
-              <Button
-                loading={submitting}
-                disabled={!certified || !notes.trim()}
-                onClick={handleSubmitReview}
-              >
-                <FormattedMessage id="admin.accessReview.modal.submit" />
-              </Button>
-            </Group>
-          </Stack>
-        )}
-      </Modal>
+              <Group justify="flex-end">
+                <Button variant="subtle" onClick={() => setReviewOpened(false)}>
+                  <FormattedMessage id="common.button.cancel" />
+                </Button>
+                <Button
+                  loading={submitting}
+                  disabled={!certified || !notes.trim()}
+                  onClick={handleSubmitReview}
+                >
+                  <FormattedMessage id="admin.accessReview.modal.submit" />
+                </Button>
+              </Group>
+            </Stack>
+          )}
+        </Modal>
+      )}
     </>
   );
 };

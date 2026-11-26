@@ -43,9 +43,9 @@ ss -ltnp 'sport = :80 or sport = :443'   # deve virar vazio
 | Arquivo | Quando usar | Secrets | Dados persistentes |
 |---|---|---|---|
 | `docker-compose.yml` | Produção padrão (TLS Let's Encrypt) | variáveis de ambiente (`.env`) | volumes nomeados |
-| `docker-compose.prod.yml` | Produção com Docker Swarm/secrets externos | Docker secrets (arquivo) | bind mounts em `/opt/app/data` (disco local) |
+| `docker-compose.prod.yml` | Produção com Docker Swarm/secrets externos | Docker secrets (arquivo) | bind mounts em `/mnt/sstv-sigav` (disco local) |
 | `docker-compose.local.yml` | Teste local (HTTP, sem TLS) | `.env.local` | volume nomeado (backend-data) |
-| `docker-compose.preprod.yml` | Ensaio pré-produção no servidor final (sobe sobre o `prod`, TLS interno por IP) | Docker secrets (ensaio) | bind mounts em `/opt/app/data` |
+| `docker-compose.preprod.yml` | Ensaio pré-produção no servidor final (sobe sobre o `prod`, TLS interno por IP) | Docker secrets (ensaio) | bind mounts em `/mnt/sstv-sigav` |
 | `docker-compose.monitoring.yml` | Stack de observabilidade (prometheus, grafana, loki, promtail) | — | — |
 
 > Detalhes de cada variante em `README.md` → "Docker Compose (variantes)".
@@ -63,6 +63,7 @@ em `/etc/caddy/Caddyfile`. Assim, sem editar o compose, você escolhe o modo:
 | `prod` (default) | `Caddyfile.prod` | TLS Let's Encrypt (domínio No-IP ou próprio) | 80/443 |
 | `ip` | `Caddyfile.ip` | Acesso por IP — HTTP (`:80`) ou `tls internal` (`:443`) | 80/443 |
 | `local` | `Caddyfile.local` | Homologação/LAN sem TLS | 3000 |
+| `lan-prod` (overlay) | `Caddyfile.lan-prod` | Produção em LAN sem domínio, TLS autoassinado (via `docker-compose.lan-prod.yml`) | 5000 |
 
 Exemplos:
 
@@ -364,6 +365,65 @@ Se a máquina não usa os defaults (distro Debian, usuário `urubu`, caminho
 > `DROP`). Recrie a rede: `docker compose -f docker-compose.local.yml down && up -d`
 > (volumes nomeados preservam os dados). Sintoma: containers saudáveis entre si
 > não se comunicam, mas host→container funciona.
+
+### 6.4 Implantação em LAN sem domínio — HTTPS autoassinado em `10.10.10.153:5000`
+
+Quando ainda não há domínio, use o overlay `docker-compose.lan-prod.yml` sobre o
+compose de produção. Ele **preserva RAID6, secrets, hardening e healthchecks** e
+só troca o ingresso do Caddy:
+
+- `https://10.10.10.153:5000` — acesso principal (certificado local `tls internal`);
+- `http://10.10.10.153/` (porta 80) — redireciona para o HTTPS na porta 5000;
+- `general.appUrl = https://10.10.10.153:5000` — aplicado ao banco no boot via
+  `APP_URL`, inclusive em bancos já existentes em `/mnt/sstv-sigav`;
+- `general.secureCookies` permanece `true` (há TLS real; cookies `__Host-`
+  continuam funcionando).
+
+> ⚠️ A porta 5000 é **HTTPS**. Abrir `http://10.10.10.153:5000` não funciona —
+> use `https://` explicitamente ou entre pela porta 80 e seja redirecionado.
+
+**No host de produção (`/opt/controle-share-videos-v1.0`):**
+
+```bash
+# .env (gitignored) — defaults do overlay já são 10.10.10.153:5000
+cat > .env <<'EOF'
+DATA_ROOT=/mnt/sstv-sigav
+LAN_HOST=10.10.10.153
+LAN_PORT=5000
+COMPOSE_FILES="docker-compose.prod.yml docker-compose.lan-prod.yml"
+EOF
+
+# RAID6 precisa estar montado antes (docs/operacional/STORAGE-EXTERNO-RAID6.md)
+sudo mkdir -p /mnt/sstv-sigav/{uploads,audit-worm,images}
+sudo chown -R 1002:1002 /mnt/sstv-sigav
+
+docker compose -f docker-compose.prod.yml \
+               -f docker-compose.lan-prod.yml up -d --build
+
+# Verificação
+curl -kfsS https://10.10.10.153:5000/api/health
+```
+
+O deploy automático também aceita o overlay: defina `COMPOSE_FILES` no ambiente
+do `scripts/deploy/deploy-prod.sh` (ou no job de deploy do GitHub Actions). O
+script continua aceitando `COMPOSE_FILE` para um único arquivo.
+
+**Certificado autoassinado:** o navegador avisará na primeira visita. Para
+eliminar o aviso nas máquinas da LAN, exporte a CA do Caddy e instale-a como
+autoridade de confiança:
+
+```bash
+docker compose -f docker-compose.prod.yml \
+               -f docker-compose.lan-prod.yml exec -T caddy \
+  cat /data/caddy/pki/authorities/local/root.crt > /tmp/sigav-lan-ca.crt
+# Distribuir /tmp/sigav-lan-ca.crt (Windows: Trusted Root Certification
+# Authorities; Linux: /usr/local/share/ca-certificates + update-ca-certificates)
+```
+
+> Se trocar `LAN_HOST`/`LAN_PORT`, ajuste também `CORS_ORIGIN` e `APP_URL`
+> (o overlay deriva ambos dessas variáveis, mas valores explícitos têm
+> precedência). Certifique-se de liberar TCP/5000 no firewall da LAN.
+> Este modo é para rede interna confiável; sem domínio não há Let's Encrypt.
 
 ---
 

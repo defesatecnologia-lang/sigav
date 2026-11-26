@@ -29,13 +29,16 @@ const AdminConfigInput = ({
   allConfigVariables,
   updatedConfigVariables,
   optionalConfigVariables,
+  readOnly = false,
 }: {
   configVariable: AdminConfig;
   updateConfigVariable: (variable: UpdateConfig) => void;
   allConfigVariables?: AdminConfig[];
   updatedConfigVariables?: UpdateConfig[];
   optionalConfigVariables?: AdminConfig[];
+  readOnly?: boolean;
 }) => {
+  const disabled = readOnly || !configVariable.allowEdit;
   const isCustomCssConfig = configVariable.key === "appearance.customCss";
   const isThemePrimaryColorConfig =
     configVariable.key === "appearance.themePrimaryColor";
@@ -102,7 +105,7 @@ const AdminConfigInput = ({
             style={{
               width: "100%",
             }}
-            disabled={!configVariable.allowEdit}
+            disabled={disabled}
             {...form.getInputProps("stringValue")}
             onChange={(e) => onValueChange(configVariable, e.target.value)}
           />
@@ -111,7 +114,7 @@ const AdminConfigInput = ({
             style={{
               width: "100%",
             }}
-            disabled={!configVariable.allowEdit}
+            disabled={disabled}
             autosize
             minRows={8}
             {...form.getInputProps("stringValue")}
@@ -123,7 +126,7 @@ const AdminConfigInput = ({
             style={{
               width: "100%",
             }}
-            disabled={!configVariable.allowEdit}
+            disabled={disabled}
             data={languages}
             value={form.values.stringValue}
             placeholder={configVariable.defaultValue}
@@ -136,7 +139,7 @@ const AdminConfigInput = ({
             style={{
               width: "100%",
             }}
-            disabled={!configVariable.allowEdit}
+            disabled={disabled}
             data={[
               "victoria",
               "blue",
@@ -167,7 +170,7 @@ const AdminConfigInput = ({
               style={{
                 width: "100%",
               }}
-              disabled={!configVariable.allowEdit}
+              disabled={disabled}
               value={form.values.stringValue}
               placeholder="#464379"
               format="hex"
@@ -194,7 +197,7 @@ const AdminConfigInput = ({
             style={{
               width: "100%",
             }}
-            disabled={!configVariable.allowEdit}
+            disabled={disabled}
             data={["xs", "sm", "md", "lg", "xl"]}
             value={form.values.stringValue}
             placeholder={configVariable.defaultValue}
@@ -206,7 +209,7 @@ const AdminConfigInput = ({
             style={{
               width: "100%",
             }}
-            disabled={!configVariable.allowEdit}
+            disabled={disabled}
             data={[
               {
                 label: (
@@ -250,7 +253,7 @@ const AdminConfigInput = ({
             style={{
               width: "100%",
             }}
-            disabled={!configVariable.allowEdit}
+            disabled={disabled}
             {...form.getInputProps("stringValue")}
             placeholder={configVariable.defaultValue}
             onChange={(e) => onValueChange(configVariable, e.target.value)}
@@ -262,7 +265,7 @@ const AdminConfigInput = ({
           style={{
             width: "100%",
           }}
-          disabled={!configVariable.allowEdit}
+          disabled={disabled}
           autosize
           minRows={isCustomCssConfig ? 8 : undefined}
           {...form.getInputProps("textValue")}
@@ -273,7 +276,7 @@ const AdminConfigInput = ({
       {configVariable.type == "number" && (
         <NumberInput
           {...form.getInputProps("numberValue")}
-          disabled={!configVariable.allowEdit}
+          disabled={disabled}
           placeholder={configVariable.defaultValue}
           onChange={(number) => onValueChange(configVariable, number)}
           w={201}
@@ -282,7 +285,7 @@ const AdminConfigInput = ({
       {configVariable.type == "filesize" && (
         <FileSizeInput
           {...form.getInputProps("numberValue")}
-          disabled={!configVariable.allowEdit}
+          disabled={disabled}
           value={parseInt(configVariable.value ?? configVariable.defaultValue)}
           onChange={(bytes) => onValueChange(configVariable, bytes)}
           w={201}
@@ -292,7 +295,7 @@ const AdminConfigInput = ({
         (isEmailShareConfig || isEmailVerificationConfig) && (
           <>
             <Switch
-              disabled={!isSmtpEnabled}
+              disabled={disabled || !isSmtpEnabled}
               {...form.getInputProps("booleanValue", { type: "checkbox" })}
               onChange={(e) => onValueChange(configVariable, e.target.checked)}
             />
@@ -302,7 +305,7 @@ const AdminConfigInput = ({
         !(isEmailShareConfig || isEmailVerificationConfig) && (
           <>
             <Switch
-              disabled={!configVariable.allowEdit}
+              disabled={disabled}
               {...form.getInputProps("booleanValue", { type: "checkbox" })}
               onChange={(e) => onValueChange(configVariable, e.target.checked)}
             />
@@ -311,7 +314,7 @@ const AdminConfigInput = ({
       {configVariable.type == "timespan" && (
         <TimespanInput
           value={stringToTimespan(configVariable.value)}
-          disabled={!configVariable.allowEdit}
+          disabled={disabled}
           min={configVariable.key === "share.fileRetentionPeriod" ? -1 : 0}
           onChange={(timespan) =>
             onValueChange(configVariable, timespanToString(timespan))

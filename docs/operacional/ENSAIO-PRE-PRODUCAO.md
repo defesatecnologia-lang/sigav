@@ -5,7 +5,7 @@
 > aceite, todo o ensaio é removido e a produção é criada limpa.
 >
 > **Quando usar:** você tem **um único servidor** e quer reduzir risco antes da
-> implantação definitiva. O ensaio valida storage em `/opt/app/data`, secrets do
+> implantação definitiva. O ensaio valida storage em `/mnt/sstv-sigav`, secrets do
 > Swarm, permissões, TLS, backup/restore e o pipeline de deploy.
 >
 > **O que este roteiro NÃO é:** staging permanente. É um ensaio descartável.
@@ -18,8 +18,10 @@
   roteiro nele.
 - Os **secrets do Swarm são globais e imutáveis**: os valores do ensaio serão
   removidos no final (Fase 7) e recriados com os valores reais (Fase 8).
-- O bind mount `/opt/app/data` **não** é removido por `docker compose down -v`;
-  a remoção é manual (Fase 7).
+- O bind mount `/mnt/sstv-sigav` **não** é removido por `docker compose down -v`;
+  a remoção é manual (Fase 7). Para não correr risco de apagar dados de produção,
+  rode o ensaio com `DATA_ROOT=/mnt/sstv-sigav/preprod` (exportado no host) e
+  remova apenas essa subpasta. O compose aceita qualquer valor de `DATA_ROOT`.
 - **Let's Encrypt tem limite de emissão** (5 certificados idênticos/semana).
   Por isso o ensaio usa `tls internal` (autoassinado). A emissão real fica
   para a Fase 8, uma única vez.
@@ -112,12 +114,12 @@ git fetch --tags
 git checkout v1.0.0-rc1
 
 # Diretórios de dados no MESMO caminho da produção
-sudo mkdir -p /opt/app/data/images /opt/app/backups
-sudo chown -R 1002:1002 /opt/app/data
-sudo chmod 750 /opt/app/data
+sudo mkdir -p /mnt/sstv-sigav/images /opt/app/backups
+sudo chown -R 1002:1002 /mnt/sstv-sigav
+sudo chmod 750 /mnt/sstv-sigav
 
 # Conferência: dono 1002:1002
-ls -ldn /opt/app/data /opt/app/data/images
+ls -ldn /mnt/sstv-sigav /mnt/sstv-sigav/images
 ```
 
 Validação estática antes de subir:
@@ -224,7 +226,7 @@ docker exec preprod-controle-share-videos-backend \
   sh -lc 'echo "DATABASE_URL=$DATABASE_URL"; echo "DATA_DIRECTORY=$DATA_DIRECTORY"'
 
 # Arquivos no host (mesmo caminho do container)
-ls -la /opt/app/data
+ls -la /mnt/sstv-sigav
 
 # Integridade + contagens (better-sqlite3 já vem na imagem)
 docker exec -w /opt/app/backend preprod-controle-share-videos-backend \
@@ -244,8 +246,8 @@ Esperado: `integrity: [ { integrity_check: 'ok' } ]`, `users >= 1`,
 6. Confirme a gravação no host:
 
 ```bash
-find /opt/app/data/uploads -type f -mmin -30 | head
-ls -la /opt/app/data/uploads/shares
+find /mnt/sstv-sigav/uploads -type f -mmin -30 | head
+ls -la /mnt/sstv-sigav/uploads/shares
 ```
 
 Esperado: arquivos com dono `1002:1002`.
@@ -319,7 +321,7 @@ docker exec preprod-controle-share-videos-backend sh -c 'ls -l /run/secrets'
 Se existir um sistema antigo, valide o caminho de upgrade:
 
 1. Gere um backup **anonimizado** do banco atual.
-2. Pare o backend, substitua `/opt/app/data/controle-videos.db` pela cópia.
+2. Pare o backend, substitua `/mnt/sstv-sigav/controle-videos.db` pela cópia.
 3. Suba novamente: o entrypoint executa `prisma migrate deploy`.
 4. Rode o `integrity_check` e valide contagens/anexos.
 
@@ -333,8 +335,8 @@ Se existir um sistema antigo, valide o caminho de upgrade:
 | 2 | `prod-readiness-check.sh` com 0 FAIL | ☐ |
 | 3 | 3 containers `healthy`, nenhum `Restarting` | ☐ |
 | 4 | `/api/health` → 200 | ☐ |
-| 5 | DB em `/opt/app/data`, `integrity_check = ok` | ☐ |
-| 6 | Upload grava em `/opt/app/data/uploads` como `1002:1002` | ☐ |
+| 5 | DB em `/mnt/sstv-sigav`, `integrity_check = ok` | ☐ |
+| 6 | Upload grava em `/mnt/sstv-sigav/uploads` como `1002:1002` | ☐ |
 | 7 | Dados sobrevivem a `restart` e `down`/`up` | ☐ |
 | 8 | Backup criado e `restore-test.sh` OK | ☐ |
 | 9 | Swagger 404, headers HSTS/CSP presentes | ☐ |
@@ -363,7 +365,7 @@ mkdir -p /opt/controle-share-videos-v1.0/.preprod-evidence
   echo "== compose ps =="; docker compose -f docker-compose.prod.yml -f docker-compose.preprod.yml ps
   echo "== health =="; curl -kfsS "https://${LAN_HOST}/api/health"
   echo "== readiness =="; CI=true bash scripts/ci/prod-readiness-check.sh
-  echo "== data =="; ls -la /opt/app/data
+  echo "== data =="; ls -la /mnt/sstv-sigav
 } > .preprod-evidence/aceite-$(date +%Y%m%d_%H%M%S).txt 2>&1
 
 tar czf /opt/app/backups/evidencias-preprod-$(date +%Y%m%d).tar.gz \
@@ -392,7 +394,9 @@ docker secret rm admin_email admin_username admin_password smtp_password \
   acme_email domain jwt_secret
 
 # 3. Remover dados e backups de ensaio (bind mounts NÃO saem no down -v)
-sudo rm -rf /opt/app/data /opt/app/backups
+# ATENÇÃO: se o ensaio usou DATA_ROOT=/mnt/sstv-sigav/preprod, remova SOMENTE
+# essa subpasta — NUNCA a raiz /mnt/sstv-sigav se houver dados de produção.
+sudo rm -rf /mnt/sstv-sigav/preprod /opt/app/backups
 sudo rm -rf /opt/controle-share-videos-v1.0/.preprod-evidence
 
 # 4. (Opcional) remover imagens do ensaio para forçar build limpo
@@ -414,7 +418,7 @@ docker ps -a --format '{{.Names}}' | grep preprod || echo "sem containers prepro
 docker volume ls --format '{{.Name}}' | grep preprod || echo "sem volumes preprod OK"
 docker network ls --format '{{.Name}}' | grep preprod || echo "sem redes preprod OK"
 docker secret ls
-[ ! -e /opt/app/data ] && echo "/opt/app/data removido OK"
+[ ! -e /mnt/sstv-sigav/preprod ] && echo "/mnt/sstv-sigav/preprod removido OK"
 ss -ltnp 'sport = :80 or sport = :443'   # deve voltar a ficar vazio
 ```
 
@@ -434,10 +438,10 @@ git fetch --tags
 git checkout v1.0.0        # ou o commit final aprovado
 
 # 2. Diretórios de produção
-sudo mkdir -p /opt/app/data/images /opt/app/backups
-sudo chown -R 1002:1002 /opt/app/data
-sudo chmod 750 /opt/app/data
-ls -ldn /opt/app/data
+sudo mkdir -p /mnt/sstv-sigav/images /opt/app/backups
+sudo chown -R 1002:1002 /mnt/sstv-sigav
+sudo chmod 750 /mnt/sstv-sigav
+ls -ldn /mnt/sstv-sigav
 
 # 3. Secrets REAIS (valores definitivos)
 docker swarm init 2>/dev/null || true
@@ -507,7 +511,7 @@ ensaio, volte para o `Caddyfile.prod` e recrie os secrets com os valores reais.
 
 | Sintoma | Causa provável | Ação |
 |---|---|---|
-| `EACCES`/`EROFS` em `/opt/app/data` | dono/permissão errados | `chown -R 1002:1002 /opt/app/data`; `chmod 750` |
+| `EACCES`/`EROFS` em `/mnt/sstv-sigav` | dono/permissão errados | `chown -R 1002:1002 /mnt/sstv-sigav`; `chmod 750` |
 | Caddy não emite certificado | porta 80/443 fechada ou DNS errado | `ss -ltnp`, `dig <dominio>`, logs do caddy |
 | `secret ... not found` no `up` | secret ausente | `docker secret ls` e recriar |
 | Login falha com `csrf_invalid` | `secureCookies=true` sobre HTTP | use TLS interno (C2) ou `secureCookies=false` (só em HTTP) |
