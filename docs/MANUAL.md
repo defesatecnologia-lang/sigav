@@ -191,7 +191,7 @@ openssl rand -base64 48          > scripts/secrets/jwt_secret
 printf '%s' '10.10.10.153'        > scripts/secrets/domain
 printf '%s' 'admin@empresa.local' > scripts/secrets/acme_email
 printf '%s' '<senha-smtp>'        > scripts/secrets/smtp_password
-chmod 600 scripts/secrets/*
+chmod 644 scripts/secrets/*   # o Docker preserva o mode no mount; containers leem como 1002/caddy
 
 # 5. Copiar o .env e subir a stack em LAN sem domínio
 cp .env /opt/sistemas/sigav/.env

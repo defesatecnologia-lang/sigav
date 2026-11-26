@@ -41,6 +41,11 @@ services:
     # Hardening: capabilities, no-new-privileges, seccomp (Phase 1)
     cap_drop:
       - ALL
+    # create-user.sh usa su-exec para dropar de root para 1002:1002; sem
+    # SETUID/SETGID o cap_drop: ALL quebra com "setgroups: Operation not permitted".
+    cap_add:
+      - SETUID
+      - SETGID
     security_opt:
       - no-new-privileges:true
       - seccomp=./docker/seccomp/default.json
@@ -106,7 +111,8 @@ services:
     # Start the Next.js standalone server (runtime stage does not define a CMD)
     command: ["sh", "-c", "cd /opt/app/frontend && PORT=3333 HOSTNAME=0.0.0.0 node server.js"]
     healthcheck:
-      test: ["CMD", "curl", "-fs", "http://127.0.0.1:3333"]
+      # frontend-runner é node:alpine sem curl; usa o wget do busybox.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3333"]
       interval: 10s
       timeout: 5s
       start_period: 30s
@@ -237,8 +243,10 @@ secrets:
   # `external: true` é suportado apenas por Swarm/`docker stack deploy` e
   # falha com "unsupported external secret" no `docker compose up`.
   #
-  # Crie os arquivos em ${SECRETS_DIR:-./scripts/secrets} no host, com 0600,
-  # ANTES do `up`. O diretório já é gitignored e excluído do build context.
+  # Crie os arquivos em ${SECRETS_DIR:-./scripts/secrets} no host ANTES do `up`.
+  # Use 0644 nos arquivos (o Docker preserva o mode no mount e os containers
+  # rodam como UID 1002 / usuário caddy) e 0700 no diretório. O diretório já é
+  # gitignored e excluído do build context.
   # Ex.: printf '%s' 'admin@empresa.local' > ./scripts/secrets/admin_email
   #     openssl rand -base64 48 > ./scripts/secrets/admin_password
   #
