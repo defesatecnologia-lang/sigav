@@ -157,11 +157,54 @@ Ver guia completo em `docs/operacional/DEPLOY.md` e `docs/PLANO-DOMINIO.md`.
 
 Usa `docker-compose.prod.yml` com:
 
-- **Secrets externos** (Docker Swarm): `domain`, `acme_email`, `admin_email`, `admin_username`, `admin_password`, `smtp_password`
+- **Secrets file-based** (arquivos 0600 em `./scripts/secrets`, lidos via `*_FILE`): `domain`, `acme_email`, `admin_email`, `admin_username`, `admin_password`, `jwt_secret`, `smtp_password`
 - **Bind mounts** para `/mnt/sstv-sigav` (RAID6 externo; host = container via `DATA_ROOT`)
 - **UID/GID 1002:1002** consistente host↔container
 
-Ver `docs/PLANO-IMPLANTACAO.md` e `docs/operacional/DEPLOY.md` §7–10.
+> O nome de apresentação do sistema é **SIGAV**. Os nomes `controle-share-videos*`
+> (diretório do repo, arquivos compose, containers, volumes e secrets) são
+> internos e foram mantidos de propósito para não quebrar o sistema — não os
+> renomeie sem atualizar compose, scripts, mounts e healthchecks.
+
+### Pré-deploy no host (executar antes do `up`)
+
+```bash
+# 1. O RAID6 precisa estar montado ANTES de criar os diretórios —
+#    caso contrário o Docker cria tudo como root no disco raiz.
+sudo mountpoint -q /mnt/sstv-sigav || { echo "RAID6 não montado — abortando"; exit 1; }
+
+# 2. Diretórios persistidos (banco, uploads, auditoria WORM e imagens do frontend)
+sudo mkdir -p /mnt/sstv-sigav/{images,uploads/_temp,audit-worm}
+
+# 3. Permissões: host 1002:1002 = usuário controle-user do container
+sudo chown -R 1002:1002 /mnt/sstv-sigav
+sudo chmod 750 /mnt/sstv-sigav
+
+# 4. Secrets em arquivo (valores NOVOS — nunca reutilize .env.local).
+#    `external: true` só funciona em Swarm/`docker stack deploy`; com
+#    `docker compose up` falha com "unsupported external secret".
+mkdir -p scripts/secrets && chmod 700 scripts/secrets
+printf '%s' 'admin@empresa.local' > scripts/secrets/admin_email
+printf '%s' 'admin'               > scripts/secrets/admin_username
+openssl rand -base64 48          > scripts/secrets/admin_password
+openssl rand -base64 48          > scripts/secrets/jwt_secret
+printf '%s' '10.10.10.153'        > scripts/secrets/domain
+printf '%s' 'admin@empresa.local' > scripts/secrets/acme_email
+printf '%s' '<senha-smtp>'        > scripts/secrets/smtp_password
+chmod 600 scripts/secrets/*
+
+# 5. Copiar o .env e subir a stack em LAN sem domínio
+cp .env /opt/sistemas/sigav/.env
+chmod 600 /opt/sistemas/sigav/.env
+cd /opt/sistemas/sigav
+docker compose -f docker-compose.prod.yml \
+               -f docker-compose.lan-prod.yml up -d --build
+curl -kfsS https://10.10.10.153:5000/api/health
+```
+
+> Os arquivos em `scripts/secrets/` precisam ser legíveis pelo usuário que executa `docker compose` e nunca devem ser commitados (já estão no `.gitignore` e no `.dockerignore`). `domain` e `acme_email` são exigidos pelo compose mesmo em LAN sem domínio (o Caddyfile.lan-prod não os usa). As imagens padrão são copiadas automaticamente para `/mnt/sstv-sigav/images` pelo entrypoint no primeiro boot. Após trocar qualquer secret: `docker compose ... up -d --force-recreate`.
+
+Ver `docs/operacional/HOST-PROVISIONING-ONPREMISE.md` §5 e `docs/operacional/DEPLOY.md` §4 e §6.4.
 
 ---
 
@@ -266,10 +309,10 @@ docker compose down -v --remove-orphans
 
 ```bash
 # Backup manual (executa scripts/backup.sh no host)
-sudo /opt/controle-share-videos-v1.0/scripts/backup.sh
+sudo /opt/sistemas/sigav/scripts/backup.sh
 
 # Restore test (valida backup em DB temporário)
-sudo /opt/controle-share-videos-v1.0/scripts/restore-test.sh
+sudo /opt/sistemas/sigav/scripts/restore-test.sh
 
 # Ver integridade do SQLite (host = container no compose.prod)
 sqlite3 /mnt/sstv-sigav/controle-videos.db "PRAGMA integrity_check;"
@@ -282,7 +325,7 @@ Ver `docs/operacional/BACKUP_RESTORE.md`.
 ## 10. Atualização do Sistema (Produção)
 
 ```bash
-cd /opt/controle-share-videos-v1.0
+cd /opt/sistemas/sigav
 
 # 1. Backup antes de atualizar
 sudo ./scripts/backup.sh
