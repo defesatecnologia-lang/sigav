@@ -34,7 +34,7 @@
   "dependencies": {
     "@controle-share/shared": "file:../packages/shared",
     "@mantine/core": "^9.8.1",
-    "@mantine/form": "^9.8.1",
+    "@mantine/form": "^9.8.2",
     "@mantine/hooks": "^9.8.0",
     "@mantine/modals": "^9.8.1",
     "@mantine/notifications": "^9.8.1",
