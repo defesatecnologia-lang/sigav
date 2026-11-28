@@ -120,7 +120,7 @@ rollback() {
 # --- 2. Backup pré-deploy (fail-closed quando GPG requerido) ----------------
 if [ "${RUN_BACKUP}" = "1" ] && [ -f scripts/backup.sh ]; then
   log "executando backup pré-deploy (RUN_BACKUP=1)"
-  if ! BACKUP_DIR="${BACKUP_DIR}" ./scripts/backup.sh; then
+  if ! BACKUP_DIR="${BACKUP_DIR}" bash scripts/backup.sh; then
     log "ERROR: backup pré-deploy falhou — abortando deploy (não deploya sem backup)" >&2
     exit 1
   fi
