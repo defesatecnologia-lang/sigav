@@ -354,16 +354,34 @@ git push origin main
 
 ### Opção C — executar o script manualmente no servidor
 
-Serve para validar o script, mas **não** testa a configuração do GitHub:
+Serve para validar o script, mas **não** testa a configuração do GitHub.
+Basta executá-lo sem variáveis:
 
 ```bash
 cd /opt/controle-share-videos-v1.0
-TARGET_REF="$(git rev-parse origin/main)" \
-APP_DIR=/opt/controle-share-videos-v1.0 \
-COMPOSE_FILE=docker-compose.yml \
-RUN_BACKUP=1 \
 ./scripts/deploy/deploy-prod.sh
 ```
+
+O padrão faz `git fetch --prune origin`, deploya `origin/main`, usa
+`docker-compose.prod.yml` e executa o backup pré-deploy. Se o host usar outro
+compose, defina apenas `COMPOSE_FILE=docker-compose.yml` antes de rodar.
+Como o backup é obrigatório por padrão, defina `GPG_RECIPIENT` uma vez em
+`/etc/default/sigav-deploy` (`GPG_RECIPIENT=chave-ou-email`) — o script carrega
+esse arquivo automaticamente; variáveis já exportadas têm precedência (§2.4).
+
+Para host sem domínio, configure o mesmo arquivo com o overlay LAN (sem passar
+nada na hora de rodar):
+
+```bash
+# /etc/default/sigav-deploy
+GPG_RECIPIENT=chave-ou-email
+COMPOSE_FILES="docker-compose.prod.yml docker-compose.lan-prod.yml"
+LAN_HOST=10.10.10.153
+LAN_PORT=5000
+```
+
+O log do deploy mostra os compose files usados; a validação externa é
+`curl -kfsS https://10.10.10.153:5000/api/health` (DEPLOY.md §6.4).
 
 ---
 
