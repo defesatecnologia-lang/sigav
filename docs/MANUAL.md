@@ -325,23 +325,93 @@ Ver `docs/operacional/BACKUP_RESTORE.md`.
 
 ## 10. Atualização do Sistema (Produção)
 
+### 10.1 Deploy com um único comando (padrão)
+
+O `scripts/deploy/deploy-prod.sh` faz tudo sozinho: `git fetch`, backup,
+checkout do SHA de `origin/main`, build, `up -d` e healthcheck com rollback
+automático. Não é preciso passar variáveis na execução — configure uma vez no
+host:
+
+```bash
+# /etc/default/sigav-deploy (ajuste o usuário, a chave GPG e o IP da LAN)
+sudo sh -c 'cat > /etc/default/sigav-deploy' <<'EOF'
+APP_DIR=/opt/sistemas/sigav
+GPG_RECIPIENT=chave-ou-email
+COMPOSE_FILES="docker-compose.prod.yml docker-compose.lan-prod.yml"
+LAN_HOST=10.10.10.153
+LAN_PORT=5000
+EOF
+sudo chown defesa-tecnologia:defesa-tecnologia /etc/default/sigav-deploy
+sudo chmod 600 /etc/default/sigav-deploy
+```
+
+> Sem domínio, mantenha o overlay `docker-compose.lan-prod.yml` como acima:
+> HTTPS autoassinado em `https://10.10.10.153:5000` (`http://<ip>/` redireciona).
+> Com domínio, use `COMPOSE_FILES=docker-compose.prod.yml` e defina
+> `DOMAIN`/`ACME_EMAIL` (ou os secrets em `scripts/secrets/`).
+> `GPG_RECIPIENT` é obrigatório por causa do backup fail-closed; se precisar
+> pular o backup, defina `RUN_BACKUP=0`. Variáveis exportadas no ambiente
+> sobrepõem as do arquivo.
+
+Sequência de atualização:
+
 ```bash
 cd /opt/sistemas/sigav
 
-# 1. Backup antes de atualizar
-sudo ./scripts/backup.sh
-
-# 2. Pull + rebuild
+# 1. Atualizar o código (após o deploy o repo fica em detached HEAD)
+git fetch --prune origin
+git checkout main
 git pull --ff-only origin main
-docker compose up -d --build
 
-# 3. Verificar saúde
+# 2. Deploy (o log deve mostrar os dois compose files)
+./scripts/deploy/deploy-prod.sh
+
+# 3. Verificar
+curl -kfsS https://10.10.10.153:5000/api/health
 docker ps --filter name=controle-share-videos --format "{{.Names}}: {{.Status}}"
 docker exec controle-share-videos-backend curl -fs http://127.0.0.1:8080/api/health
 ```
 
-> **Rollback:** `git checkout <tag-anterior> && docker compose up -d --build`
-> Ver `docs/operacional/RUNBOOKS.md`.
+Saída esperada no passo 2:
+
+```
+[deploy] iniciando deploy de origin/main (atual: <sha-anterior>) em /opt/sistemas/sigav
+[deploy] executando backup pré-deploy (RUN_BACKUP=1)
+[deploy] build das imagens (docker-compose.prod.yml docker-compose.lan-prod.yml)...
+[deploy] deploy concluído com sucesso: <sha-novo> (anterior: <sha-anterior>)
+```
+
+> Se aparecer `TARGET_REF: TARGET_REF is required`, o servidor está com a
+> versão antiga do script — refaça o passo 1. Se aparecer
+> `./scripts/backup.sh: Permission denied`, rode
+> `chmod +x scripts/backup.sh` (o modo correto já está no git).
+
+### 10.2 Alternativa manual (sem o script)
+
+```bash
+cd /opt/sistemas/sigav
+
+sudo ./scripts/backup.sh
+git pull --ff-only origin main
+docker compose -f docker-compose.prod.yml \
+               -f docker-compose.lan-prod.yml up -d --build
+
+curl -kfsS https://10.10.10.153:5000/api/health
+```
+
+### 10.3 Rollback
+
+```bash
+cd /opt/sistemas/sigav
+git fetch --prune origin
+git checkout --detach <sha-anterior>
+docker compose -f docker-compose.prod.yml \
+               -f docker-compose.lan-prod.yml up -d --build
+curl -kfsS https://10.10.10.153:5000/api/health
+```
+
+> O script já faz rollback automático se build/up/healthcheck falharem
+> (código de saída `2`). Ver `docs/operacional/RUNBOOKS.md`.
 
 ---
 
@@ -354,6 +424,8 @@ docker exec controle-share-videos-backend curl -fs http://127.0.0.1:8080/api/hea
 | **Produção (HTTPS + domínio)** | `DOMAIN=... ACME_EMAIL=... ADMIN_PASSWORD=... JWT_SECRET=... docker compose up -d --build` |
 | **Produção IP (HTTP)** | `CADDYFILE=ip ADMIN_PASSWORD=... JWT_SECRET=... docker compose up -d --build` |
 | **Produção Swarm/disco local** | `docker compose -f docker-compose.prod.yml up -d` |
+| **Deploy produção (1 comando)** | `cd /opt/sistemas/sigav && ./scripts/deploy/deploy-prod.sh` |
+| **Produção LAN (sem domínio)** | `docker compose -f docker-compose.prod.yml -f docker-compose.lan-prod.yml up -d --build` |
 | **Monitoramento** | `docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d` |
 | **Parar dev** | `docker compose --env-file .env.local -f docker-compose.local.yml down` |
 | **Parar dev + staging** | `docker compose --env-file .env.local -f docker-compose.local.yml -f docker-compose.staging.yml down` |
