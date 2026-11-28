@@ -383,6 +383,51 @@ Para **qualquer incidente** com impacto em usuários:
 
 ---
 
+## 13. `/img/*` retorna 404 após deploy (brasão, logos, favicon)
+
+**Sintoma:** `/img/brasao.png`, logos e favicon retornam 404 no servidor (o
+service worker pode registrar `bad-precaching-response`). No local funciona.
+
+**Causa:** o bind mount `${DATA_ROOT}/images:/opt/app/frontend/public/img`
+sombreia os arquivos que vêm dentro da imagem. O mecanismo de repovoação
+quebrava porque a cópia de recuperação ficava em `/tmp/img` (tmpfs em produção)
+e porque o serviço `frontend` — que é o que o Caddy realmente serve — não
+executava `scripts/docker/entrypoint.sh`.
+
+**Diagnóstico:**
+
+```bash
+# 1) O deploy chegou ao commit da correção? (CI só deploya em push para main)
+git -C /opt/controle-share-videos-v1.0 rev-parse --short HEAD
+git -C /opt/controle-share-videos-v1.0 log -1 --oneline
+
+# 2) A imagem contém a origem fora do tmpfs?
+docker exec controle-share-videos-frontend ls -la /opt/app/default-img
+docker exec controle-share-videos-frontend ls -la /tmp/img   # vazio: é tmpfs
+
+# 3) O destino (volume do host) foi populado?
+docker exec controle-share-videos-frontend ls -la /opt/app/frontend/public/img
+
+# 4) Resposta final
+curl -sSI "https://${DOMAIN}/img/brasao.png" | head -1
+```
+
+**Correção (já no código):** `Dockerfile` guarda os defaults em
+`/opt/app/default-img` no stage `frontend-runner` *e* no stage final `runner`;
+`entrypoint.sh` restaura a partir desse caminho; `docker-compose.prod.yml`
+faz a mesma cópia no `command` do serviço `frontend` antes do `node server.js`.
+
+**Validação:** os quatro comandos acima devem mostrar os arquivos em
+`/opt/app/default-img` e em `/opt/app/frontend/public/img`, e o `curl` deve
+retornar `200`.
+
+**Pós-incidente:** se commit/HEAD no host estiver desatualizado, faça o merge
+da correção em `main` (ou aponte `TARGET_REF` para o commit correto) e rode o
+deploy novamente: `docker compose build` é necessário para a nova camada do
+Dockerfile entrar na imagem.
+
+---
+
 ## Referências cruzadas
 
 - `docs/operacional/DEPLOY.md` — upgrade, rollback, healthchecks
