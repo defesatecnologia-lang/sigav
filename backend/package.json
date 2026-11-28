@@ -93,7 +93,7 @@
     "@eslint/js": "^10.0.1",
     "@nestjs/cli": "^12.0.15",
     "@nestjs/schematics": "^12.0.16",
-    "@nestjs/testing": "^12.5.1",
+    "@nestjs/testing": "^12.6.2",
     "@types/archiver": "^8.0.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/content-disposition": "^0.5.9",
