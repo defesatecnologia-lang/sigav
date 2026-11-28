@@ -519,7 +519,7 @@ Detalhes em `docs/operacional/DEPLOY.md` §6.3.
 
 | Item | Status | Detalhes |
 |---|---|---|
-| CSP | ✅ Ativo | `Caddyfile.prod` — `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' ...` (H-01 / S-05) |
+| CSP | ✅ Ativo | `Caddyfile.prod` — `default-src 'self'; script-src 'self' 'sha256-u7Co9mML413Iqc/uZHb6yQFWo87/jCX80+mFesBl7nE='; style-src 'self' 'unsafe-inline' ...` (hash do `ColorSchemeScript` do Mantine; H-01 / S-05) |
 | Rate limit edge | ✅ Ativo | Caddy: 100 req/10s (dynamic), 10 req/60s (auth endpoints) |
 | Security headers | ✅ Ativo | HSTS preload, X-Frame-Options DENY, X-Content-Type-Options nosniff, COOP/COEP/CORP, Permissions-Policy |
 | Secrets | ✅ Docker secrets | `docker-compose.prod.yml` — `*_FILE` vars + secrets externos; `docker-compose.yml` — variáveis `.env` |

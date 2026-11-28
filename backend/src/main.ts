@@ -164,7 +164,12 @@ export async function configureApp(
       contentSecurityPolicy: {
         directives: {
           defaultSrc: ["'self'"],
-          scriptSrc: ["'self'"],
+          // Hash do ColorSchemeScript do Mantine (_document.tsx) — necessário
+          // porque o CSP não usa 'unsafe-inline'. Recalcular se o Mantine mudar.
+          scriptSrc: [
+            "'self'",
+            "'sha256-u7Co9mML413Iqc/uZHb6yQFWo87/jCX80+mFesBl7nE='",
+          ],
           styleSrc: ["'self'", "'unsafe-inline'"],
           imgSrc: ["'self'", "data:", "blob:"],
           fontSrc: ["'self'", "data:"],

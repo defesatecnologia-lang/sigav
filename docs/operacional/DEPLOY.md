@@ -255,8 +255,10 @@ O `reverse-proxy/Caddyfile.prod` já vem com:
   cifras fortes (AES-256-GCM / ChaCha20-Poly1305).
 - **HSTS** com preload (2 anos), `X-Frame-Options: DENY`, `X-Content-Type-Options:
   nosniff`, `Referrer-Policy`, cross-origin isolation, `Permissions-Policy`.
-- **CSP** estrita (H-01 / S-05): `default-src 'self'; script-src 'self';
-  style-src 'self' 'unsafe-inline' ...` — ver comentário no arquivo.
+- **CSP** estrita (H-01 / S-05): `default-src 'self'; script-src 'self'
+  'sha256-u7Co9mML413Iqc/uZHb6yQFWo87/jCX80+mFesBl7nE='; style-src 'self'
+  'unsafe-inline' ...` — o hash autoriza apenas o `ColorSchemeScript` do Mantine
+  (sem `unsafe-inline`); recalcular após atualizar o Mantine.
 - **Rate limit** no edge: `100 req / 10s` por IP (zona `dynamic`) e
   `10 req / 60s` para endpoints de auth (zona `auth`).
 - **Health check** interno `/api/health` restrito a redes internas
@@ -451,6 +453,11 @@ docker compose -f docker-compose.prod.yml \
 # Authorities; Linux: /usr/local/share/ca-certificates + update-ca-certificates)
 ```
 
+> Enquanto a CA não for instalada, o navegador também bloqueia o registro do
+> Service Worker (`An SSL certificate error occurred when fetching the script`
+> em `/sw.js`). Isso é esperado: a aplicação funciona normalmente, sem o PWA
+> offline. Depois de confiar na CA, o erro desaparece sem mudar código.
+
 > Se trocar `LAN_HOST`/`LAN_PORT`, ajuste também `CORS_ORIGIN` e `APP_URL`
 > (o overlay deriva ambos dessas variáveis, mas valores explícitos têm
 > precedência). Certifique-se de liberar TCP/5000 no firewall da LAN.
@@ -525,6 +532,18 @@ Migrações do Prisma são aplicadas automaticamente no boot do backend
 (`prisma migrate deploy` no `scripts/docker/entrypoint.sh`). Caso o schema
 tenha mudado, o seed idempotente (`user.seed.ts`, `config.seed.ts`) atualiza
 o admin e as configs sem sobrescrever dados de usuários/shares.
+A senha do admin **não é mais reescrita a cada boot**: se ela foi trocada em
+`Trocar senha`, ela permanece válida após deploys/restarts. Para forçar a
+senha do secret (`scripts/secrets/admin_password`) sobre a conta existente —
+por exemplo, ao rodar uma rotação do secret — suba uma única vez com
+`ADMIN_PASSWORD_RESET=1` e remova a variável depois:
+
+```bash
+ADMIN_PASSWORD_RESET=1 docker compose -f docker-compose.prod.yml \
+  -f docker-compose.lan-prod.yml up -d --force-recreate backend
+```
+
+Sem essa variável, uma senha personalizada nunca é sobrescrita pelo seed.
 
 ### 9.1 Rollback
 

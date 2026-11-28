@@ -204,7 +204,7 @@ Destinatário                Backend                         Persistência
 ### Caddy (Edge)
 
 - **TLS automático** Let's Encrypt (renovação nativa); alternativa `tls internal` por IP
-- **CSP estrito**: `default-src 'self'; script-src 'self'` (self-only)
+- **CSP estrito**: `default-src 'self'; script-src 'self'` + hash do `ColorSchemeScript` do Mantine (sem `unsafe-inline`)
 - Filtro `pwd=` em query strings e logs
 - Rate limit na borda: **dynamic 100 req/10s** geral, **10 req/60s** endpoints de auth
 
