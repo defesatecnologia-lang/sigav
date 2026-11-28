@@ -434,8 +434,10 @@ curl -kfsS https://10.10.10.153:5000/api/health
 ```
 
 O deploy automático também aceita o overlay: defina `COMPOSE_FILES` no ambiente
-do `scripts/deploy/deploy-prod.sh` (ou no job de deploy do GitHub Actions). O
-script continua aceitando `COMPOSE_FILE` para um único arquivo.
+do `scripts/deploy/deploy-prod.sh` (ou no job de deploy do GitHub Actions). Para
+executar só o script no host, coloque as mesmas variáveis em
+`/etc/default/sigav-deploy`, que é carregado automaticamente; o script continua
+aceitando `COMPOSE_FILE` para um único arquivo.
 
 **Certificado autoassinado:** o navegador avisará na primeira visita. Para
 eliminar o aviso nas máquinas da LAN, exporte a CA do Caddy e instale-a como
