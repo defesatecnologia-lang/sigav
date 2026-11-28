@@ -204,6 +204,8 @@ curl -kfsS https://10.10.10.153:5000/api/health
 ```
 
 > Os arquivos em `scripts/secrets/` precisam ser legíveis pelo usuário que executa `docker compose` e nunca devem ser commitados (já estão no `.gitignore` e no `.dockerignore`). `domain` e `acme_email` são exigidos pelo compose mesmo em LAN sem domínio (o Caddyfile.lan-prod não os usa). As imagens padrão são copiadas automaticamente para `/mnt/sstv-sigav/images` pelo entrypoint no primeiro boot. Após trocar qualquer secret: `docker compose ... up -d --force-recreate`.
+>
+> A senha do admin escolhida em **Trocar senha** não é mais sobrescrita no boot (isso causava 401 após deploy). Se precisar que a senha do arquivo `admin_password` volte a valer, suba **uma vez** com `ADMIN_PASSWORD_RESET=1 docker compose ... up -d --force-recreate backend` e remova a variável em seguida.
 
 Ver `docs/operacional/HOST-PROVISIONING-ONPREMISE.md` §5 e `docs/operacional/DEPLOY.md` §4 e §6.4.
 

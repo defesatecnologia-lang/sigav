@@ -44,11 +44,21 @@ async function seedAdminUser() {
   const prisma = new PrismaClient({ adapter });
 
   try {
-    const hash = await argon2.hash(password, ARGON2_OPTIONS);
-
     const existingUser = await prisma.user.findFirst({
       where: { OR: [{ email: email.toLowerCase().trim() }, { username: username.trim() }] },
     });
+
+    // O seed é idempotente, mas NÃO deve apagar a senha escolhida pelo admin
+    // na interface: isso causava 401 no login após cada restart/deploy.
+    // Rotação do secret é explícita (ADMIN_PASSWORD_RESET=1) — ver DEPLOY.md.
+    const forcePasswordReset = ["1", "true", "yes"].includes(
+      (process.env.ADMIN_PASSWORD_RESET ?? "").trim().toLowerCase(),
+    );
+    const shouldSetPassword =
+      !existingUser || !existingUser.password || forcePasswordReset;
+    const passwordField = shouldSetPassword
+      ? { password: await argon2.hash(password, ARGON2_OPTIONS) }
+      : {};
 
     if (existingUser) {
       await prisma.user.update({
@@ -56,19 +66,23 @@ async function seedAdminUser() {
         data: {
           email: email.toLowerCase().trim(),
           username: username.trim(),
-          password: hash,
+          ...passwordField,
           isAdmin: true,
           role: "admin",
           isActivated: true,
         },
       });
-      console.log(`Admin user updated: ${email}`);
+      console.log(
+        `Admin user updated: ${email} (password ${
+          forcePasswordReset ? "reset from ADMIN_PASSWORD" : "preserved"
+        })`,
+      );
     } else {
       await prisma.user.create({
         data: {
           email: email.toLowerCase().trim(),
           username: username.trim(),
-          password: hash,
+          ...passwordField,
           isAdmin: true,
           role: "admin",
           isActivated: true,

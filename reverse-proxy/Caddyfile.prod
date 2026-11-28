@@ -42,7 +42,7 @@ https://{$DOMAIN} {
         # by Mantine's runtime CSS-in-JS. media-src/blob allow <video>/<audio>
         # streaming; worker-src 'self' permits the Serwist service worker;
         # frame-src 'self' permits the same-origin PDF <iframe> preview.
-        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; frame-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-u7Co9mML413Iqc/uZHb6yQFWo87/jCX80+mFesBl7nE='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; frame-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     }
 
     # Rate limiting at the edge (INFRA-HIGH-01)

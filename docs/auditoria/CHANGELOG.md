@@ -7,6 +7,24 @@
 
 ---
 
+## v1.2.23 — Login admin: seed não sobrescreve mais senha trocada (2026-11-28)
+
+### Resumo
+
+Relato em produção/LAN: sistema subiu saudável, mas o login com a senha de admin retornava **401**. Causa: `scripts/docker/entrypoint.sh` executa `user.seed.ts` em **todo boot**, e o seed reescrevia o hash da senha do admin com `ADMIN_PASSWORD` (secret), desfazendo qualquer troca feita em `Trocar senha`. O endpoint de login respondedo 401 era sintoma, não falha de autenticação.
+
+### Implementado
+
+- **`backend/prisma/seed/user.seed.ts`**: em admin já existente, atualiza e-mail/usuário/papel/estado, mas **preserva o hash de senha**. O hash só é gerado/criado quando o usuário é novo, está sem senha, ou quando `ADMIN_PASSWORD_RESET=1` é definido explicitamente (rotação do secret). Log do seed informa `password preserved` / `password reset from ADMIN_PASSWORD`.
+- **CSP sem `unsafe-inline`**: o `ColorSchemeScript` do Mantine (`frontend/src/pages/_document.tsx`) era bloqueado por `script-src 'self'`. Hash exato (`sha256-u7Co9mML413Iqc/uZHb6yQFWo87/jCX80+mFesBl7nE=`) adicionado ao CSP no backend (Helmet) e nos 4 Caddyfiles; docs atualizadas. O erro de SSL do `/sw.js` em LAN é esperado até a CA local do Caddy ser confiável — registrado em `DEPLOY.md` §6.4.
+- **`docs/operacional/DEPLOY.md`** e **`docs/MANUAL.md`**: procedimento de rotação do secret de senha com `ADMIN_PASSWORD_RESET=1` + `--force-recreate backend`.
+
+### Validado
+
+- `tsc --noEmit` do seed limpo; teste em banco SQLite temporário: (1) seed cria admin com senha inicial; (2) novo valor no secret + boot → senha inicial continua válida e a nova não; (3) `ADMIN_PASSWORD_RESET=1` → nova senha válida e antiga inválida.
+
+---
+
 ## v1.2.22 — P1-04/P1-06/P2-03 fechados + LGPD DSR + deps runtime (2026-11-04)
 
 ### Resumo
