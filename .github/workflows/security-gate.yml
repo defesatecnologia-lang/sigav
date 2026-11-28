@@ -418,7 +418,7 @@ jobs:
           cyclonedx-npm --output-file sbom-root.json
 
       - name: Sign SBOMs with cosign (keyless)
-        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v3
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v3
         with:
           cosign-release: 'v2.2.0'
 
@@ -505,7 +505,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:latest
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v3
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v3
 
       - name: Sign images (keyless)
         run: |
