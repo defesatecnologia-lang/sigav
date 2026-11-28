@@ -47,14 +47,14 @@ updates:
     ignore:
       - dependency-name: typescript
         versions: [">=7.0.0"]
-      # @mantine/core@9.8.1 declara peer exato @mantine/hooks@"9.8.1" (assim
-      # como @mantine/modals e @mantine/notifications). Um bump isolado do
-      # hooks para 9.8.2+ quebra o `npm ci` com ERESOLVE (PR #44): todos os
-      # jobs que instalam dependências falham. Ignorar até que core, form,
-      # hooks, modals e notifications sejam atualizados JUNTOS para 9.8.2+;
-      # ao fazer esse bump coordenado, remover esta regra.
-      - dependency-name: "@mantine/hooks"
-        versions: [">=9.8.2"]
+    # Os pacotes @mantine/* têm peers exatos entre si (ex.: core@9.8.2 exige
+    # hooks@9.8.2, modals/notifications exigem core + hooks na mesma versão).
+    # Um bump isolado quebra o `npm ci` com ERESOLVE (PR #44), então o
+    # Dependabot deve propor todos juntos numa única PR.
+    groups:
+      mantine:
+        patterns:
+          - "@mantine/*"
 
   # Pacote compartilhado
   - package-ecosystem: npm
