@@ -41,8 +41,8 @@
     "@uiw/react-md-editor": "^4.2.4",
     "axios": "^1.21.1",
     "cookies-next": "^6.1.1",
-    "dompurify": "^3.4.18",
-    "markdown-to-jsx": "^9.10.6",
+    "dompurify": "^3.5.0",
+    "markdown-to-jsx": "^9.11.0",
     "mime-types": "^3.0.2",
     "next": "^16.4.6",
     "p-limit": "^7.3.1",
@@ -58,11 +58,11 @@
     "yup": "^1.4.0"
   },
   "devDependencies": {
-    "@serwist/next": "^9.5.15",
+    "@serwist/next": "^9.6.0",
     "@types/mime-types": "^3.0.1",
     "@types/node": "^26.1.1",
     "@types/qrcode": "^1.5.5",
-    "@types/react": "^19.2.18",
+    "@types/react": "^19.3.2",
     "@types/react-dom": "^19.2.3",
     "@types/uuid": "^10.0.0",
     "@typescript-eslint/parser": "^8.72.2",
@@ -72,7 +72,7 @@
     "prettier": "^3.10.1",
     "serwist": "^9.5.15",
     "typescript": "^6.0.3",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   },
   "allowScripts": {
     "unrs-resolver@1.12.2": true,
